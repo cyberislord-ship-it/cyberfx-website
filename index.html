@@ -21,33 +21,96 @@
         }
 
         nav {
+            height: 72px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 20px 7%;
+            padding: 0 7%;
             background: #080b14;
             border-bottom: 1px solid #151b2b;
         }
 
         .logo {
-            font-size: 24px;
+            font-size: 25px;
             font-weight: bold;
+            letter-spacing: 0.5px;
         }
 
         .logo span {
             color: #00e5ff;
         }
 
-        nav a {
-            color: white;
-            text-decoration: none;
-            margin-left: 20px;
+        /* THREE DOT MENU */
+
+        .menu {
+            position: relative;
         }
+
+        .menu-button {
+            background: transparent;
+            border: none;
+            color: white;
+            font-size: 28px;
+            cursor: pointer;
+            padding: 5px 10px;
+            line-height: 1;
+        }
+
+        .menu-content {
+            display: none;
+            position: absolute;
+            right: 0;
+            top: 45px;
+            width: 210px;
+            background: #0b101c;
+            border: 1px solid #1c2940;
+            border-radius: 12px;
+            padding: 8px;
+            box-shadow: 0 15px 35px rgba(0,0,0,0.45);
+            z-index: 1000;
+        }
+
+        .menu-content.show {
+            display: block;
+        }
+
+        .menu-content a,
+        .menu-content button {
+            width: 100%;
+            display: block;
+            padding: 12px 14px;
+            color: white;
+            background: transparent;
+            border: none;
+            text-decoration: none;
+            text-align: left;
+            border-radius: 8px;
+            font-size: 15px;
+            cursor: pointer;
+        }
+
+        .menu-content a:hover,
+        .menu-content button:hover {
+            background: #111a2b;
+            color: #00e5ff;
+        }
+
+        .logout {
+            border-top: 1px solid #1c2940 !important;
+            margin-top: 6px;
+            color: #ff5c5c !important;
+        }
+
+        /* HERO */
 
         .hero {
             text-align: center;
             padding: 90px 20px;
-            background: radial-gradient(circle at top, #10243a, #05070d 60%);
+            background: radial-gradient(
+                circle at top,
+                #10243a,
+                #05070d 60%
+            );
         }
 
         .hero h1 {
@@ -95,19 +158,16 @@
 
         .section-title {
             text-align: center;
-            margin-bottom: 15px;
-            font-size: 32px;
-        }
-
-        .section-subtitle {
-            text-align: center;
-            color: #7f899d;
             margin-bottom: 40px;
+            font-size: 32px;
         }
 
         .cards {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            grid-template-columns: repeat(
+                auto-fit,
+                minmax(220px, 1fr)
+            );
             gap: 20px;
         }
 
@@ -127,61 +187,8 @@
             color: #aab3c5;
         }
 
-        /* SIGNAL CARDS */
-
         .signal {
             border-left: 4px solid #00e5ff;
-            position: relative;
-        }
-
-        .signal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 18px;
-        }
-
-        .signal-header h3 {
-            margin: 0;
-            font-size: 20px;
-        }
-
-        .buy {
-            color: #00e676;
-            font-weight: bold;
-            font-size: 14px;
-        }
-
-        .sell {
-            color: #ff5252;
-            font-weight: bold;
-            font-size: 14px;
-        }
-
-        .signal-info {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px;
-        }
-
-        .signal-info div {
-            background: #080d18;
-            padding: 9px;
-            border-radius: 6px;
-            color: #aab3c5;
-            font-size: 13px;
-        }
-
-        .signal-info strong {
-            display: block;
-            color: white;
-            margin-top: 2px;
-        }
-
-        .signal-status {
-            margin-top: 15px;
-            color: #7f899d;
-            font-size: 12px;
         }
 
         .plans {
@@ -192,6 +199,10 @@
             font-size: 30px;
             font-weight: bold;
             margin: 15px 0;
+        }
+
+        .telegram {
+            text-align: center;
         }
 
         footer {
@@ -207,27 +218,32 @@
             margin: 0 8px;
         }
 
+        /* MOBILE */
+
         @media (max-width: 600px) {
+
+            nav {
+                padding: 0 5%;
+            }
+
+            .hero {
+                padding: 70px 20px;
+            }
 
             .hero h1 {
                 font-size: 36px;
             }
 
-            nav {
-                padding: 18px 5%;
-            }
-
-            nav a {
-                margin-left: 8px;
-                font-size: 14px;
+            .hero p {
+                font-size: 16px;
             }
 
             section {
                 padding: 55px 5%;
             }
 
-            .signal-info {
-                grid-template-columns: 1fr 1fr;
+            .section-title {
+                font-size: 28px;
             }
         }
     </style>
@@ -238,13 +254,53 @@
     <!-- NAVIGATION -->
 
     <nav>
-        <div class="logo">Cyber<span>FX</span></div>
 
-        <div>
-            <a href="#signals">Signals</a>
-            <a href="#plans">Plans</a>
-            <a href="#">Login</a>
+        <div class="logo">
+            Cyber<span>FX</span>
         </div>
+
+        <div class="menu">
+
+            <button
+                class="menu-button"
+                onclick="toggleMenu()"
+                aria-label="Open menu"
+            >
+                ⋮
+            </button>
+
+            <div id="menuContent" class="menu-content">
+
+                <a href="/">🏠 Home</a>
+
+                <a href="#signals">📊 Live Signals</a>
+
+                <a href="#plans">💳 Plans</a>
+
+                <a href="login.html">🔐 Login</a>
+
+                <a href="register.html">📝 Register</a>
+
+                <a href="dashboard.html">📈 Dashboard</a>
+
+                <a
+                    href="https://t.me/CyberTradingSignalsBot"
+                    target="_blank"
+                >
+                    ✈️ Telegram
+                </a>
+
+                <button
+                    class="logout"
+                    onclick="logout()"
+                >
+                    🚪 Logout
+                </button>
+
+            </div>
+
+        </div>
+
     </nav>
 
 
@@ -252,20 +308,29 @@
 
     <section class="hero">
 
-        <h1>Cyber<span>FX</span> Trading Signals</h1>
+        <h1>
+            Cyber<span>FX</span> Trading Signals
+        </h1>
 
         <p>
-            Premium forex trading signals built around market structure,
-            liquidity and confirmed price-action setups.
+            Premium forex trading signals built around
+            market structure, liquidity and confirmed
+            price-action setups.
         </p>
 
         <div class="buttons">
 
-            <a href="#plans" class="btn primary">
+            <a
+                href="register.html"
+                class="btn primary"
+            >
                 Get Started
             </a>
 
-            <a href="#signals" class="btn secondary">
+            <a
+                href="#signals"
+                class="btn secondary"
+            >
                 View Signals
             </a>
 
@@ -282,19 +347,18 @@
             Why CyberFX?
         </h2>
 
-        <p class="section-subtitle">
-            Structured analysis. Confirmed setups. Clear execution.
-        </p>
-
         <div class="cards">
 
             <div class="card">
 
-                <h3>Confirmed Setups</h3>
+                <h3>
+                    Confirmed Setups
+                </h3>
 
                 <p>
-                    Signals are generated only when the required market
-                    conditions and confirmation are present.
+                    Signals are generated only when the
+                    required market conditions and
+                    confirmation are present.
                 </p>
 
             </div>
@@ -302,11 +366,14 @@
 
             <div class="card">
 
-                <h3>APA + CRT</h3>
+                <h3>
+                    APA + CRT
+                </h3>
 
                 <p>
-                    Our analysis combines APA and CRT concepts with
-                    market structure and liquidity analysis.
+                    Our analysis combines APA and CRT
+                    concepts with market structure and
+                    liquidity analysis.
                 </p>
 
             </div>
@@ -314,11 +381,14 @@
 
             <div class="card">
 
-                <h3>Multi-Timeframe</h3>
+                <h3>
+                    Multi-Timeframe
+                </h3>
 
                 <p>
-                    Markets are analyzed across multiple timeframes to
-                    identify stronger trading opportunities.
+                    Markets are analyzed across multiple
+                    timeframes to identify stronger
+                    trading opportunities.
                 </p>
 
             </div>
@@ -326,11 +396,14 @@
 
             <div class="card">
 
-                <h3>Risk Focused</h3>
+                <h3>
+                    Risk Focused
+                </h3>
 
                 <p>
-                    Every setup is structured with clear entry,
-                    stop-loss and take-profit levels.
+                    Every setup is structured with clear
+                    entry, stop-loss and take-profit
+                    levels.
                 </p>
 
             </div>
@@ -340,238 +413,51 @@
     </section>
 
 
-    <!-- LIVE SIGNALS -->
+    <!-- SIGNALS -->
 
     <section id="signals">
 
         <h2 class="section-title">
-            Live Signals
+            Latest Signals
         </h2>
-
-        <p class="section-subtitle">
-            CyberFX confirmed market setups
-        </p>
-
 
         <div class="cards">
 
-
-            <!-- GOLD -->
-
             <div class="card signal">
 
-                <div class="signal-header">
+                <h3>
+                    Gold — XAUUSD
+                </h3>
 
-                    <h3>XAUUSD</h3>
-
-                    <span class="buy">
-                        BUY
-                    </span>
-
-                </div>
-
-                <div class="signal-info">
-
-                    <div>
-                        Entry
-                        <strong>3,XXX.XX</strong>
-                    </div>
-
-                    <div>
-                        Stop Loss
-                        <strong>3,XXX.XX</strong>
-                    </div>
-
-                    <div>
-                        Take Profit
-                        <strong>3,XXX.XX</strong>
-                    </div>
-
-                    <div>
-                        RR
-                        <strong>1:6</strong>
-                    </div>
-
-                    <div>
-                        Entry TF
-                        <strong>15M</strong>
-                    </div>
-
-                    <div>
-                        Market
-                        <strong>Gold</strong>
-                    </div>
-
-                </div>
-
-                <div class="signal-status">
-                    Example signal — awaiting live connection
-                </div>
+                <p>
+                    Status: Waiting for confirmed setup
+                </p>
 
             </div>
 
 
-            <!-- BTC -->
-
             <div class="card signal">
 
-                <div class="signal-header">
+                <h3>
+                    Bitcoin — BTCUSD
+                </h3>
 
-                    <h3>BTCUSD</h3>
-
-                    <span class="buy">
-                        BUY
-                    </span>
-
-                </div>
-
-                <div class="signal-info">
-
-                    <div>
-                        Entry
-                        <strong>XX,XXX</strong>
-                    </div>
-
-                    <div>
-                        Stop Loss
-                        <strong>XX,XXX</strong>
-                    </div>
-
-                    <div>
-                        Take Profit
-                        <strong>XX,XXX</strong>
-                    </div>
-
-                    <div>
-                        RR
-                        <strong>1:6</strong>
-                    </div>
-
-                    <div>
-                        Entry TF
-                        <strong>30M</strong>
-                    </div>
-
-                    <div>
-                        Market
-                        <strong>Bitcoin</strong>
-                    </div>
-
-                </div>
-
-                <div class="signal-status">
-                    Example signal — awaiting live connection
-                </div>
+                <p>
+                    Status: Waiting for confirmed setup
+                </p>
 
             </div>
 
 
-            <!-- NASDAQ -->
-
             <div class="card signal">
 
-                <div class="signal-header">
+                <h3>
+                    Nasdaq — NAS100
+                </h3>
 
-                    <h3>NAS100</h3>
-
-                    <span class="sell">
-                        SELL
-                    </span>
-
-                </div>
-
-                <div class="signal-info">
-
-                    <div>
-                        Entry
-                        <strong>XX,XXX</strong>
-                    </div>
-
-                    <div>
-                        Stop Loss
-                        <strong>XX,XXX</strong>
-                    </div>
-
-                    <div>
-                        Take Profit
-                        <strong>XX,XXX</strong>
-                    </div>
-
-                    <div>
-                        RR
-                        <strong>1:6</strong>
-                    </div>
-
-                    <div>
-                        Entry TF
-                        <strong>15M</strong>
-                    </div>
-
-                    <div>
-                        Market
-                        <strong>Nasdaq</strong>
-                    </div>
-
-                </div>
-
-                <div class="signal-status">
-                    Example signal — awaiting live connection
-                </div>
-
-            </div>
-
-
-            <!-- US OIL -->
-
-            <div class="card signal">
-
-                <div class="signal-header">
-
-                    <h3>USOIL</h3>
-
-                    <span class="buy">
-                        BUY
-                    </span>
-
-                </div>
-
-                <div class="signal-info">
-
-                    <div>
-                        Entry
-                        <strong>XX.XX</strong>
-                    </div>
-
-                    <div>
-                        Stop Loss
-                        <strong>XX.XX</strong>
-                    </div>
-
-                    <div>
-                        Take Profit
-                        <strong>XX.XX</strong>
-                    </div>
-
-                    <div>
-                        RR
-                        <strong>1:6</strong>
-                    </div>
-
-                    <div>
-                        Entry TF
-                        <strong>30M</strong>
-                    </div>
-
-                    <div>
-                        Market
-                        <strong>US Oil</strong>
-                    </div>
-
-                </div>
-
-                <div class="signal-status">
-                    Example signal — awaiting live connection
-                </div>
+                <p>
+                    Status: Waiting for confirmed setup
+                </p>
 
             </div>
 
@@ -582,34 +468,38 @@
 
     <!-- PLANS -->
 
-    <section id="plans" class="plans">
+    <section
+        id="plans"
+        class="plans"
+    >
 
         <h2 class="section-title">
             CyberFX Plans
         </h2>
 
-        <p class="section-subtitle">
-            Choose your access to CyberFX premium signals.
-        </p>
-
         <div class="cards">
 
             <div class="card">
 
-                <h3>Premium</h3>
+                <h3>
+                    Premium
+                </h3>
 
                 <div class="price">
                     Coming Soon
                 </div>
 
                 <p>
-                    Access premium trading signals and the CyberFX
-                    trading community.
+                    Access premium trading signals
+                    and the CyberFX trading community.
                 </p>
 
                 <div class="buttons">
 
-                    <a href="#" class="btn primary">
+                    <a
+                        href="register.html"
+                        class="btn primary"
+                    >
                         Subscribe
                     </a>
 
@@ -624,28 +514,28 @@
 
     <!-- TELEGRAM -->
 
-    <section>
+    <section class="telegram">
 
         <h2 class="section-title">
             Join CyberFX on Telegram
         </h2>
 
-        <div style="text-align:center;">
+        <p style="color:#aab3c5;">
 
-            <p style="color:#aab3c5;">
+            Receive CyberFX trading signals and
+            updates directly through Telegram.
 
-                Receive CyberFX trading signals and updates directly
-                through Telegram.
+        </p>
 
-            </p>
+        <div class="buttons">
 
-            <div class="buttons">
-
-                <a href="#" class="btn primary">
-                    Join Telegram
-                </a>
-
-            </div>
+            <a
+                href="https://t.me/CyberTradingSignalsBot"
+                target="_blank"
+                class="btn primary"
+            >
+                Join Telegram
+            </a>
 
         </div>
 
@@ -673,6 +563,54 @@
         </div>
 
     </footer>
+
+
+    <!-- JAVASCRIPT -->
+
+    <script>
+
+        function toggleMenu() {
+
+            const menu =
+                document.getElementById("menuContent");
+
+            menu.classList.toggle("show");
+
+        }
+
+
+        function logout() {
+
+            alert(
+                "Logout will be connected when the CyberFX account system is activated."
+            );
+
+        }
+
+
+        window.addEventListener(
+            "click",
+            function(event) {
+
+                const menu =
+                    document.getElementById("menuContent");
+
+                const button =
+                    document.querySelector(".menu-button");
+
+                if (
+                    !menu.contains(event.target) &&
+                    !button.contains(event.target)
+                ) {
+
+                    menu.classList.remove("show");
+
+                }
+
+            }
+        );
+
+    </script>
 
 </body>
 </html>
