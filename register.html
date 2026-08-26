@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-    <title>CyberFX Register</title>
+    <title>Register | CyberFX</title>
 
     <style>
         * {
@@ -14,171 +14,319 @@
         }
 
         body {
+            font-family: Arial, sans-serif;
+            background: #05070d;
+            color: white;
             min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-family: Arial, sans-serif;
-            background: #05070d;
-            color: white;
             padding: 20px;
         }
 
-        .register-box {
+        .container {
             width: 100%;
-            max-width: 420px;
-            background: #0b101c;
-            border: 1px solid #172033;
-            border-radius: 14px;
-            padding: 35px;
+            max-width: 430px;
         }
 
         .logo {
             text-align: center;
-            font-size: 28px;
+            font-size: 30px;
             font-weight: bold;
-            margin-bottom: 8px;
+            margin-bottom: 25px;
         }
 
         .logo span {
             color: #00e5ff;
         }
 
+        .card {
+            background: #0b101c;
+            border: 1px solid #172033;
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.35);
+        }
+
+        h1 {
+            text-align: center;
+            font-size: 27px;
+            margin-bottom: 8px;
+        }
+
         .subtitle {
             text-align: center;
-            color: #7f899d;
-            margin-bottom: 30px;
+            color: #8f9aae;
+            margin-bottom: 25px;
+            font-size: 14px;
         }
 
         label {
             display: block;
             margin-bottom: 7px;
             font-size: 14px;
+            color: #dce2ed;
         }
 
         input {
             width: 100%;
             padding: 13px;
-            margin-bottom: 18px;
-            background: #080d18;
-            color: white;
-            border: 1px solid #202a3d;
+            margin-bottom: 17px;
+            background: #080d17;
+            border: 1px solid #26334a;
             border-radius: 8px;
+            color: white;
             outline: none;
+            font-size: 15px;
         }
 
         input:focus {
             border-color: #00e5ff;
         }
 
-        button {
+        .button {
             width: 100%;
             padding: 14px;
-            border: none;
-            border-radius: 8px;
             background: #00e5ff;
             color: #05070d;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
             font-weight: bold;
             cursor: pointer;
+            margin-top: 5px;
         }
 
-        .login {
+        .button:active {
+            transform: scale(0.99);
+        }
+
+        .message {
+            display: none;
             text-align: center;
-            margin-top: 22px;
-            color: #7f899d;
+            margin-top: 15px;
+            padding: 10px;
+            border-radius: 8px;
             font-size: 14px;
         }
 
-        .login a {
+        .success {
+            display: block;
+            background: #0b2b25;
+            color: #56f0c5;
+            border: 1px solid #176653;
+        }
+
+        .error {
+            display: block;
+            background: #2b1014;
+            color: #ff7373;
+            border: 1px solid #6b242c;
+        }
+
+        .links {
+            text-align: center;
+            margin-top: 22px;
+            color: #8f9aae;
+            font-size: 14px;
+        }
+
+        .links a {
             color: #00e5ff;
             text-decoration: none;
         }
 
         .back {
-            display: block;
             text-align: center;
             margin-top: 20px;
-            color: #7f899d;
+        }
+
+        .back a {
+            color: #8f9aae;
             text-decoration: none;
             font-size: 14px;
+        }
+
+        .back a:hover {
+            color: #00e5ff;
         }
     </style>
 </head>
 
 <body>
 
-    <div class="register-box">
+    <div class="container">
 
         <div class="logo">
             Cyber<span>FX</span>
         </div>
 
-        <div class="subtitle">
-            Create your CyberFX account
+        <div class="card">
+
+            <h1>Create Account</h1>
+
+            <p class="subtitle">
+                Create your CyberFX trading account
+            </p>
+
+            <form id="registerForm">
+
+                <label for="name">
+                    Full Name
+                </label>
+
+                <input
+                    type="text"
+                    id="name"
+                    placeholder="Enter your full name"
+                    required
+                >
+
+                <label for="email">
+                    Email Address
+                </label>
+
+                <input
+                    type="email"
+                    id="email"
+                    placeholder="Enter your email"
+                    required
+                >
+
+                <label for="password">
+                    Password
+                </label>
+
+                <input
+                    type="password"
+                    id="password"
+                    placeholder="Create a password"
+                    minlength="6"
+                    required
+                >
+
+                <label for="confirmPassword">
+                    Confirm Password
+                </label>
+
+                <input
+                    type="password"
+                    id="confirmPassword"
+                    placeholder="Confirm your password"
+                    minlength="6"
+                    required
+                >
+
+                <button
+                    type="submit"
+                    class="button"
+                >
+                    Create Account
+                </button>
+
+            </form>
+
+            <div
+                id="message"
+                class="message"
+            ></div>
+
+            <div class="links">
+                Already have an account?
+                <a href="login.html">
+                    Login
+                </a>
+            </div>
+
         </div>
 
-        <form>
-
-            <label for="name">
-                Full Name
-            </label>
-
-            <input
-                type="text"
-                id="name"
-                placeholder="Enter your full name"
-                required
-            >
-
-            <label for="email">
-                Email
-            </label>
-
-            <input
-                type="email"
-                id="email"
-                placeholder="Enter your email"
-                required
-            >
-
-            <label for="password">
-                Password
-            </label>
-
-            <input
-                type="password"
-                id="password"
-                placeholder="Create a password"
-                required
-            >
-
-            <label for="confirm-password">
-                Confirm Password
-            </label>
-
-            <input
-                type="password"
-                id="confirm-password"
-                placeholder="Confirm your password"
-                required
-            >
-
-            <button type="submit">
-                Create Account
-            </button>
-
-        </form>
-
-        <div class="login">
-            Already have an account?
-            <a href="login.html">Login</a>
+        <div class="back">
+            <a href="index.html">
+                ← Back to CyberFX
+            </a>
         </div>
-
-        <a href="index.html" class="back">
-            ← Back to CyberFX
-        </a>
 
     </div>
+
+
+    <script>
+
+        document
+            .getElementById("registerForm")
+            .addEventListener("submit", function(event) {
+
+                event.preventDefault();
+
+                const name =
+                    document.getElementById("name").value.trim();
+
+                const email =
+                    document.getElementById("email").value.trim();
+
+                const password =
+                    document.getElementById("password").value;
+
+                const confirmPassword =
+                    document.getElementById("confirmPassword").value;
+
+                const message =
+                    document.getElementById("message");
+
+
+                if (password !== confirmPassword) {
+
+                    message.textContent =
+                        "Passwords do not match.";
+
+                    message.className =
+                        "message error";
+
+                    return;
+                }
+
+
+                if (password.length < 6) {
+
+                    message.textContent =
+                        "Password must contain at least 6 characters.";
+
+                    message.className =
+                        "message error";
+
+                    return;
+                }
+
+
+                const user = {
+                    name: name,
+                    email: email,
+                    password: password
+                };
+
+
+                localStorage.setItem(
+                    "cyberfxUser",
+                    JSON.stringify(user)
+                );
+
+
+                message.textContent =
+                    "Account created successfully!";
+
+                message.className =
+                    "message success";
+
+
+                setTimeout(function() {
+
+                    window.location.href =
+                        "login.html";
+
+                }, 1200);
+
+            });
+
+    </script>
 
 </body>
 </html>
