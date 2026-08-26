@@ -4,29 +4,44 @@ export default {
     // =========================
     // TELEGRAM WEBHOOK
     // =========================
-    if (url.pathname === "/telegram/webhook" && request.method === "POST") {
-      const update = await request.json();
-      if (update.message) {
-        const chat = update.message.chat;
-        const text = update.message.text || "";
-        if (text === "/start" || text.startsWith("/start ")) {
-          await env.CYBERFX_USERS.put(
-            String(chat.id),
-            JSON.stringify({
-              chat_id: chat.id,
-              username: chat.username || "",
-              first_name: chat.first_name || "",
-              registered_at: new Date().toISOString()
-            })
-          );
-          await sendTelegramMessage(
-            env.TELEGRAM_BOT_TOKEN,
-            chat.id,
-            "✅ Welcome to CyberFX!\n\nYour Telegram is now connected to CyberFX.\n\nYou will receive confirmed trading signals here when available."
-          );
+    if (
+      url.pathname === "/telegram/webhook" &&
+      request.method === "POST"
+    ) {
+      try {
+        const update = await request.json();
+        if (update.message) {
+          const chat = update.message.chat;
+          const text = update.message.text || "";
+          // Register user when they send /start
+          if (text === "/start" || text.startsWith("/start ")) {
+            await env.CYBERFX_USERS.put(
+              String(chat.id),
+              JSON.stringify({
+                chat_id: chat.id,
+                username: chat.username || "",
+                first_name: chat.first_name || "",
+                registered_at: new Date().toISOString()
+              })
+            );
+            await sendTelegramMessage(
+              env.TELEGRAM_BOT_TOKEN,
+              chat.id,
+              "✅ Welcome to CyberFX!\n\n" +
+              "Your Telegram is now connected to CyberFX.\n\n" +
+              "You will receive confirmed trading signals here when available."
+            );
+          }
         }
+        return json({
+          success: true
+        });
+      } catch (error) {
+        return json({
+          success: false,
+          error: error.message
+        }, 500);
       }
-      return json({ success: true });
     }
     // =========================
     // TELEGRAM WEBHOOK SETUP
@@ -44,7 +59,8 @@ export default {
         env.TELEGRAM_BOT_TOKEN,
         "setWebhook",
         {
-          url: webhookUrl
+          url: webhookUrl,
+          allowed_updates: ["message"]
         }
       );
       return json({
@@ -54,7 +70,26 @@ export default {
       });
     }
     // =========================
-    // TELEGRAM TEST
+    // TELEGRAM WEBHOOK INFO
+    // =========================
+    if (url.pathname === "/telegram/info") {
+      if (!env.TELEGRAM_BOT_TOKEN) {
+        return json({
+          success: false,
+          error: "TELEGRAM_BOT_TOKEN is missing"
+        }, 500);
+      }
+      const result = await telegramRequest(
+        env.TELEGRAM_BOT_TOKEN,
+        "getWebhookInfo"
+      );
+      return json({
+        success: true,
+        telegram: result
+      });
+    }
+    // =========================
+    // TELEGRAM BOT TEST
     // =========================
     if (url.pathname === "/telegram/test") {
       if (!env.TELEGRAM_BOT_TOKEN) {
@@ -73,7 +108,7 @@ export default {
       });
     }
     // =========================
-    // CYBERFX API
+    // CYBERFX MARKET DATA
     // =========================
     if (url.pathname === "/api/signals") {
       const apiKey = env.TWELVE_DATA_API_KEY;
@@ -90,28 +125,46 @@ export default {
         "US OIL": "WTI"
       };
       const timeframes = [
-        { name: "1day", interval: "1day" },
-        { name: "4h", interval: "4h" },
-        { name: "1h", interval: "1h" },
-        { name: "30min", interval: "30min" },
-        { name: "15min", interval: "15min" }
+        {
+          name: "1day",
+          interval: "1day"
+        },
+        {
+          name: "4h",
+          interval: "4h"
+        },
+        {
+          name: "1h",
+          interval: "1h"
+        },
+        {
+          name: "30min",
+          interval: "30min"
+        },
+        {
+          name: "15min",
+          interval: "15min"
+        }
       ];
       const data = {};
       for (const [name, symbol] of Object.entries(instruments)) {
         data[name] = {};
         for (const tf of timeframes) {
-          data[name][tf.name] = await getCandles(
-            symbol,
-            tf.interval,
-            apiKey
-          );
+          data[name][tf.name] =
+            await getCandles(
+              symbol,
+              tf.interval,
+              apiKey
+            );
         }
       }
       return json({
         success: true,
         source: "Twelve Data",
         engine: "CyberFX",
-        timeframes: timeframes.map(tf => tf.name),
+        timeframes: timeframes.map(
+          tf => tf.name
+        ),
         data
       });
     }
@@ -123,9 +176,12 @@ export default {
         success: true,
         engine: "CyberFX",
         status: "online",
-        api_key_connected: !!env.TWELVE_DATA_API_KEY,
-        telegram_connected: !!env.TELEGRAM_BOT_TOKEN,
-        user_storage_connected: !!env.CYBERFX_USERS
+        api_key_connected:
+          !!env.TWELVE_DATA_API_KEY,
+        telegram_connected:
+          !!env.TELEGRAM_BOT_TOKEN,
+        user_storage_connected:
+          !!env.CYBERFX_USERS
       });
     }
     // =========================
@@ -135,31 +191,59 @@ export default {
   }
 };
 // ========================================
-// TWELVE DATA
+// TWELVE DATA CANDLES
 // ========================================
-async function getCandles(symbol, interval, apiKey) {
+async function getCandles(
+  symbol,
+  interval,
+  apiKey
+) {
   const apiUrl = new URL(
     "https://api.twelvedata.com/time_series"
   );
-  apiUrl.searchParams.set("symbol", symbol);
-  apiUrl.searchParams.set("interval", interval);
-  apiUrl.searchParams.set("outputsize", "100");
-  apiUrl.searchParams.set("apikey", apiKey);
+  apiUrl.searchParams.set(
+    "symbol",
+    symbol
+  );
+  apiUrl.searchParams.set(
+    "interval",
+    interval
+  );
+  apiUrl.searchParams.set(
+    "outputsize",
+    "100"
+  );
+  apiUrl.searchParams.set(
+    "apikey",
+    apiKey
+  );
   try {
-    const response = await fetch(apiUrl);
-    const result = await response.json();
-    if (!response.ok || result.status === "error") {
+    const response =
+      await fetch(apiUrl);
+    const result =
+      await response.json();
+    if (
+      !response.ok ||
+      result.status === "error"
+    ) {
       return {
         status: "error",
-        code: result.code || response.status,
-        message: result.message || "Twelve Data request failed"
+        code:
+          result.code ||
+          response.status,
+        message:
+          result.message ||
+          "Twelve Data request failed"
       };
     }
     return {
       status: "success",
-      symbol: result.meta?.symbol || symbol,
+      symbol:
+        result.meta?.symbol ||
+        symbol,
       interval,
-      candles: result.values || []
+      candles:
+        result.values || []
     };
   } catch (error) {
     return {
@@ -169,27 +253,37 @@ async function getCandles(symbol, interval, apiKey) {
   }
 }
 // ========================================
-// TELEGRAM REQUEST
+// TELEGRAM API REQUEST
 // ========================================
-async function telegramRequest(token, method, body = null) {
+async function telegramRequest(
+  token,
+  method,
+  body = null
+) {
+  const options = {};
+  if (body) {
+    options.method = "POST";
+    options.headers = {
+      "content-type":
+        "application/json"
+    };
+    options.body =
+      JSON.stringify(body);
+  }
   const response = await fetch(
     `https://api.telegram.org/bot${token}/${method}`,
-    body
-      ? {
-          method: "POST",
-          headers: {
-            "content-type": "application/json"
-          },
-          body: JSON.stringify(body)
-        }
-      : {}
+    options
   );
   return await response.json();
 }
 // ========================================
 // SEND TELEGRAM MESSAGE
 // ========================================
-async function sendTelegramMessage(token, chatId, text) {
+async function sendTelegramMessage(
+  token,
+  chatId,
+  text
+) {
   return await telegramRequest(
     token,
     "sendMessage",
@@ -202,14 +296,19 @@ async function sendTelegramMessage(token, chatId, text) {
 // ========================================
 // JSON RESPONSE
 // ========================================
-function json(data, status = 200) {
+function json(
+  data,
+  status = 200
+) {
   return new Response(
     JSON.stringify(data),
     {
       status,
       headers: {
-        "content-type": "application/json",
-        "cache-control": "no-store"
+        "content-type":
+          "application/json",
+        "cache-control":
+          "no-store"
       }
     }
   );
