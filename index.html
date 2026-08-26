@@ -3,23 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
     <title>CyberFX Trading Signals</title>
-
     <style>
         * {
             box-sizing: border-box;
             margin: 0;
             padding: 0;
         }
-
         body {
             font-family: Arial, sans-serif;
             background: #05070d;
             color: white;
             line-height: 1.6;
         }
-
         nav {
             height: 72px;
             display: flex;
@@ -29,23 +25,17 @@
             background: #080b14;
             border-bottom: 1px solid #151b2b;
         }
-
         .logo {
             font-size: 25px;
             font-weight: bold;
             letter-spacing: 0.5px;
         }
-
         .logo span {
             color: #00e5ff;
         }
-
-        /* THREE DOT MENU */
-
         .menu {
             position: relative;
         }
-
         .menu-button {
             background: transparent;
             border: none;
@@ -55,7 +45,6 @@
             padding: 5px 10px;
             line-height: 1;
         }
-
         .menu-content {
             display: none;
             position: absolute;
@@ -69,11 +58,9 @@
             box-shadow: 0 15px 35px rgba(0,0,0,0.45);
             z-index: 1000;
         }
-
         .menu-content.show {
             display: block;
         }
-
         .menu-content a,
         .menu-content button {
             width: 100%;
@@ -88,21 +75,16 @@
             font-size: 15px;
             cursor: pointer;
         }
-
         .menu-content a:hover,
         .menu-content button:hover {
             background: #111a2b;
             color: #00e5ff;
         }
-
         .logout {
             border-top: 1px solid #1c2940 !important;
             margin-top: 6px;
             color: #ff5c5c !important;
         }
-
-        /* HERO */
-
         .hero {
             text-align: center;
             padding: 90px 20px;
@@ -112,27 +94,22 @@
                 #05070d 60%
             );
         }
-
         .hero h1 {
             font-size: 48px;
             margin-bottom: 20px;
         }
-
         .hero h1 span {
             color: #00e5ff;
         }
-
         .hero p {
             max-width: 650px;
             margin: auto;
             color: #aab3c5;
             font-size: 18px;
         }
-
         .buttons {
             margin-top: 30px;
         }
-
         .btn {
             display: inline-block;
             padding: 13px 24px;
@@ -140,28 +117,25 @@
             border-radius: 8px;
             text-decoration: none;
             font-weight: bold;
+            cursor: pointer;
         }
-
         .primary {
             background: #00e5ff;
             color: #05070d;
+            border: none;
         }
-
         .secondary {
             border: 1px solid #00e5ff;
             color: #00e5ff;
         }
-
         section {
             padding: 70px 7%;
         }
-
         .section-title {
             text-align: center;
             margin-bottom: 40px;
             font-size: 32px;
         }
-
         .cards {
             display: grid;
             grid-template-columns: repeat(
@@ -170,97 +144,110 @@
             );
             gap: 20px;
         }
-
         .card {
             background: #0b101c;
             border: 1px solid #172033;
             padding: 25px;
             border-radius: 12px;
         }
-
         .card h3 {
             margin-bottom: 10px;
             color: #00e5ff;
         }
-
         .card p {
             color: #aab3c5;
         }
-
         .signal {
             border-left: 4px solid #00e5ff;
         }
-
         .plans {
             text-align: center;
         }
-
-        .price {
+        .plan-card {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            min-height: 300px;
+        }
+        .plan-card .price {
             font-size: 30px;
             font-weight: bold;
-            margin: 15px 0;
+            margin: 15px 0 5px;
+            color: white;
         }
-
+        .plan-card .duration {
+            color: #727d91;
+            font-size: 13px;
+            margin-bottom: 15px;
+        }
+        .plan-card p {
+            margin-bottom: 10px;
+        }
+        .plan-card .buttons {
+            margin-top: auto;
+        }
+        .plan-btn {
+            width: 100%;
+            border: none;
+            font-size: 14px;
+        }
         .telegram {
             text-align: center;
         }
-
         footer {
             text-align: center;
             padding: 30px;
             background: #080b14;
             color: #7f899d;
         }
-
         footer a {
             color: #00e5ff;
             text-decoration: none;
             margin: 0 8px;
         }
-
-        /* MOBILE */
-
+        .payment-message {
+            display: none;
+            margin: 20px auto 0;
+            max-width: 500px;
+            padding: 12px;
+            border-radius: 8px;
+            background: #0b101c;
+            border: 1px solid #172033;
+            color: #aab3c5;
+            font-size: 14px;
+        }
         @media (max-width: 600px) {
-
             nav {
                 padding: 0 5%;
             }
-
             .hero {
                 padding: 70px 20px;
             }
-
             .hero h1 {
                 font-size: 36px;
             }
-
             .hero p {
                 font-size: 16px;
             }
-
             section {
                 padding: 55px 5%;
             }
-
             .section-title {
                 font-size: 28px;
+            }
+            .plan-card {
+                min-height: 280px;
             }
         }
     </style>
 </head>
-
 <body>
-
     <!-- NAVIGATION -->
-
     <nav>
-
         <div class="logo">
             Cyber<span>FX</span>
         </div>
-
         <div class="menu">
-
             <button
                 class="menu-button"
                 onclick="toggleMenu()"
@@ -268,267 +255,254 @@
             >
                 ⋮
             </button>
-
             <div id="menuContent" class="menu-content">
-
                 <a href="/">🏠 Home</a>
-
                 <a href="#signals">📊 Live Signals</a>
-
                 <a href="#plans">💳 Plans</a>
-
                 <a href="login.html">🔐 Login</a>
-
                 <a href="register.html">📝 Register</a>
-
                 <a href="dashboard.html">📈 Dashboard</a>
-
                 <a
                     href="https://t.me/CyberTradingSignalsBot"
                     target="_blank"
                 >
                     ✈️ Telegram
                 </a>
-
                 <button
                     class="logout"
                     onclick="logout()"
                 >
                     🚪 Logout
                 </button>
-
             </div>
-
         </div>
-
     </nav>
-
-
     <!-- HERO -->
-
     <section class="hero">
-
         <h1>
             Cyber<span>FX</span> Trading Signals
         </h1>
-
         <p>
             Premium forex trading signals built around
             market structure, liquidity and confirmed
             price-action setups.
         </p>
-
         <div class="buttons">
-
             <a
                 href="register.html"
                 class="btn primary"
             >
                 Get Started
             </a>
-
             <a
                 href="#signals"
                 class="btn secondary"
             >
                 View Signals
             </a>
-
         </div>
-
     </section>
-
-
     <!-- WHY CYBERFX -->
-
     <section>
-
         <h2 class="section-title">
             Why CyberFX?
         </h2>
-
         <div class="cards">
-
             <div class="card">
-
                 <h3>
                     Confirmed Setups
                 </h3>
-
                 <p>
                     Signals are generated only when the
                     required market conditions and
                     confirmation are present.
                 </p>
-
             </div>
-
-
             <div class="card">
-
                 <h3>
                     APA + CRT
                 </h3>
-
                 <p>
                     Our analysis combines APA and CRT
                     concepts with market structure and
                     liquidity analysis.
                 </p>
-
             </div>
-
-
             <div class="card">
-
                 <h3>
                     Multi-Timeframe
                 </h3>
-
                 <p>
                     Markets are analyzed across multiple
                     timeframes to identify stronger
                     trading opportunities.
                 </p>
-
             </div>
-
-
             <div class="card">
-
                 <h3>
                     Risk Focused
                 </h3>
-
                 <p>
                     Every setup is structured with clear
                     entry, stop-loss and take-profit
                     levels.
                 </p>
-
             </div>
-
         </div>
-
     </section>
-
-
     <!-- SIGNALS -->
-
     <section id="signals">
-
         <h2 class="section-title">
             Latest Signals
         </h2>
-
         <div class="cards">
-
             <div class="card signal">
-
                 <h3>
                     Gold — XAUUSD
                 </h3>
-
                 <p>
                     Status: Waiting for confirmed setup
                 </p>
-
             </div>
-
-
             <div class="card signal">
-
                 <h3>
                     Bitcoin — BTCUSD
                 </h3>
-
                 <p>
                     Status: Waiting for confirmed setup
                 </p>
-
             </div>
-
-
             <div class="card signal">
-
                 <h3>
                     Nasdaq — NAS100
                 </h3>
-
                 <p>
                     Status: Waiting for confirmed setup
                 </p>
-
             </div>
-
         </div>
-
     </section>
-
-
     <!-- PLANS -->
-
     <section
         id="plans"
         class="plans"
     >
-
         <h2 class="section-title">
             CyberFX Plans
         </h2>
-
         <div class="cards">
-
-            <div class="card">
-
+            <!-- 1 MONTH -->
+            <div class="card plan-card">
                 <h3>
-                    Premium
+                    1 Month
                 </h3>
-
                 <div class="price">
-                    Coming Soon
+                    ₦10,000
                 </div>
-
+                <div class="duration">
+                    Monthly subscription
+                </div>
                 <p>
-                    Access premium trading signals
-                    and the CyberFX trading community.
+                    Access confirmed CyberFX trading
+                    signals for 1 month.
                 </p>
-
                 <div class="buttons">
-
-                    <a
-                        href="register.html"
-                        class="btn primary"
+                    <button
+                        class="btn primary plan-btn"
+                        onclick="startPayment('monthly')"
                     >
                         Subscribe
-                    </a>
-
+                    </button>
                 </div>
-
             </div>
-
+            <!-- 3 MONTHS -->
+            <div class="card plan-card">
+                <h3>
+                    3 Months
+                </h3>
+                <div class="price">
+                    ₦30,000
+                </div>
+                <div class="duration">
+                    Quarterly subscription
+                </div>
+                <p>
+                    Access confirmed CyberFX trading
+                    signals for 3 months.
+                </p>
+                <div class="buttons">
+                    <button
+                        class="btn primary plan-btn"
+                        onclick="startPayment('quarterly')"
+                    >
+                        Subscribe
+                    </button>
+                </div>
+            </div>
+            <!-- 6 MONTHS -->
+            <div class="card plan-card">
+                <h3>
+                    6 Months
+                </h3>
+                <div class="price">
+                    ₦60,000
+                </div>
+                <div class="duration">
+                    6-month subscription
+                </div>
+                <p>
+                    Access confirmed CyberFX trading
+                    signals for 6 months.
+                </p>
+                <div class="buttons">
+                    <button
+                        class="btn primary plan-btn"
+                        onclick="startPayment('biannual')"
+                    >
+                        Subscribe
+                    </button>
+                </div>
+            </div>
+            <!-- 1 YEAR -->
+            <div class="card plan-card">
+                <h3>
+                    1 Year
+                </h3>
+                <div class="price">
+                    ₦120,000
+                </div>
+                <div class="duration">
+                    Annual subscription
+                </div>
+                <p>
+                    Access confirmed CyberFX trading
+                    signals for 12 months.
+                </p>
+                <div class="buttons">
+                    <button
+                        class="btn primary plan-btn"
+                        onclick="startPayment('annual')"
+                    >
+                        Subscribe
+                    </button>
+                </div>
+            </div>
         </div>
-
+        <div
+            id="paymentMessage"
+            class="payment-message"
+        ></div>
     </section>
-
-
     <!-- TELEGRAM -->
-
     <section class="telegram">
-
         <h2 class="section-title">
             Join CyberFX on Telegram
         </h2>
-
         <p style="color:#aab3c5;">
-
             Receive CyberFX trading signals and
             updates directly through Telegram.
-
         </p>
-
         <div class="buttons">
-
             <a
                 href="https://t.me/CyberTradingSignalsBot"
                 target="_blank"
@@ -536,81 +510,145 @@
             >
                 Join Telegram
             </a>
-
         </div>
-
     </section>
-
-
     <!-- FOOTER -->
-
     <footer>
-
         <p>
             © 2026 CyberFX. All rights reserved.
         </p>
-
         <div style="margin-top:10px;">
-
             <a href="#">
                 Privacy Policy
             </a>
-
             <a href="#">
                 Terms
             </a>
-
         </div>
-
     </footer>
-
-
     <!-- JAVASCRIPT -->
-
     <script>
-
         function toggleMenu() {
-
             const menu =
                 document.getElementById("menuContent");
-
             menu.classList.toggle("show");
-
         }
-
-
+        async function startPayment(plan) {
+            const message =
+                document.getElementById("paymentMessage");
+            message.style.display = "block";
+            message.textContent =
+                "Preparing secure payment...";
+            /*
+             * The customer must be logged in before
+             * starting a subscription.
+             */
+            const loggedIn =
+                localStorage.getItem("cyberfxLoggedIn");
+            const savedUser =
+                localStorage.getItem("cyberfxUser");
+            if (
+                loggedIn !== "true" ||
+                !savedUser
+            ) {
+                message.textContent =
+                    "Please register or login before subscribing.";
+                setTimeout(function() {
+                    window.location.href =
+                        "register.html";
+                }, 1200);
+                return;
+            }
+            let user;
+            try {
+                user =
+                    JSON.parse(savedUser);
+            } catch (error) {
+                message.textContent =
+                    "Your account session is invalid. Please login again.";
+                return;
+            }
+            if (!user.email) {
+                message.textContent =
+                    "No email was found on your account.";
+                return;
+            }
+            try {
+                const response =
+                    await fetch(
+                        "/api/paystack/initialize",
+                        {
+                            method: "POST",
+                            headers: {
+                                "Content-Type":
+                                    "application/json"
+                            },
+                            body: JSON.stringify({
+                                email:
+                                    user.email,
+                                plan:
+                                    plan
+                            })
+                        }
+                    );
+                const data =
+                    await response.json();
+                if (
+                    !response.ok ||
+                    !data.success
+                ) {
+                    throw new Error(
+                        data.error ||
+                        "Unable to initialize payment."
+                    );
+                }
+                if (
+                    data.authorization_url
+                ) {
+                    window.location.href =
+                        data.authorization_url;
+                    return;
+                }
+                throw new Error(
+                    "Payment URL was not returned."
+                );
+            } catch (error) {
+                message.textContent =
+                    error.message ||
+                    "Payment could not be started.";
+            }
+        }
         function logout() {
-
-            alert(
-                "Logout will be connected when the CyberFX account system is activated."
+            localStorage.removeItem(
+                "cyberfxLoggedIn"
             );
-
+            localStorage.removeItem(
+                "cyberfxUser"
+            );
+            window.location.href =
+                "login.html";
         }
-
-
         window.addEventListener(
             "click",
             function(event) {
-
                 const menu =
-                    document.getElementById("menuContent");
-
+                    document.getElementById(
+                        "menuContent"
+                    );
                 const button =
-                    document.querySelector(".menu-button");
-
+                    document.querySelector(
+                        ".menu-button"
+                    );
                 if (
                     !menu.contains(event.target) &&
                     !button.contains(event.target)
                 ) {
-
-                    menu.classList.remove("show");
-
+                    menu.classList.remove(
+                        "show"
+                    );
                 }
-
             }
         );
-
     </script>
-
 </body>
 </html>
