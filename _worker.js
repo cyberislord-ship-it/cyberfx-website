@@ -13,34 +13,61 @@ export default {
         if (update.message) {
           const chat = update.message.chat;
           const text = update.message.text || "";
-          // Register user when they send /start
           if (text === "/start" || text.startsWith("/start ")) {
-            await env.CYBERFX_USERS.put(
-              String(chat.id),
-              JSON.stringify({
-                chat_id: chat.id,
-                username: chat.username || "",
-                first_name: chat.first_name || "",
-                registered_at: new Date().toISOString()
-              })
-            );
-            await sendTelegramMessage(
-              env.TELEGRAM_BOT_TOKEN,
-              chat.id,
-              "✅ Welcome to CyberFX!\n\n" +
-              "Your Telegram is now connected to CyberFX.\n\n" +
-              "You will receive confirmed trading signals here when available."
-            );
+            // Try to save the Telegram user.
+            // If KV fails, don't crash the webhook.
+            let storageSaved = false;
+            try {
+              if (env.CYBERFX_USERS) {
+                await env.CYBERFX_USERS.put(
+                  String(chat.id),
+                  JSON.stringify({
+                    chat_id: chat.id,
+                    username: chat.username || "",
+                    first_name: chat.first_name || "",
+                    registered_at: new Date().toISOString()
+                  })
+                );
+                storageSaved = true;
+              }
+            } catch (storageError) {
+              console.log(
+                "KV storage error:",
+                storageError.message
+              );
+            }
+            // Send welcome message.
+            if (env.TELEGRAM_BOT_TOKEN) {
+              await sendTelegramMessage(
+                env.TELEGRAM_BOT_TOKEN,
+                chat.id,
+                "✅ Welcome to CyberFX!\n\n" +
+                "Your Telegram is now connected to CyberFX.\n\n" +
+                "You will receive confirmed trading signals here when available."
+              );
+            }
+            return json({
+              success: true,
+              telegram_user_registered: true,
+              storage_saved: storageSaved
+            });
           }
         }
         return json({
-          success: true
+          success: true,
+          received: true
         });
       } catch (error) {
+        console.log(
+          "Telegram webhook error:",
+          error.message
+        );
+        // Always return 200 so Telegram doesn't keep
+        // retrying the same update because of a Worker crash.
         return json({
           success: false,
           error: error.message
-        }, 500);
+        }, 200);
       }
     }
     // =========================
@@ -191,7 +218,7 @@ export default {
   }
 };
 // ========================================
-// TWELVE DATA CANDLES
+// TWELVE DATA
 // ========================================
 async function getCandles(
   symbol,
@@ -253,7 +280,7 @@ async function getCandles(
   }
 }
 // ========================================
-// TELEGRAM API REQUEST
+// TELEGRAM REQUEST
 // ========================================
 async function telegramRequest(
   token,
