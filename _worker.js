@@ -5,7 +5,10 @@ export default {
     // =========================================================
     // HEALTH
     // =========================================================
-    if (url.pathname === "/api/health") {
+    if (
+      url.pathname === "/api/health" &&
+      request.method === "GET"
+    ) {
       return json({
         success: true,
         engine: "CyberFX",
@@ -19,162 +22,19 @@ export default {
 
     // =========================================================
     // PAYSTACK - INITIALIZE PAYMENT
+    //
+    // Supports both:
+    // /api/paystack/initialize
+    // /api/payment/initialize
     // =========================================================
     if (
-      url.pathname === "/api/payment/initialize" &&
+      (
+        url.pathname === "/api/paystack/initialize" ||
+        url.pathname === "/api/payment/initialize"
+      ) &&
       request.method === "POST"
     ) {
-      try {
-        if (!env.PAYSTACK_SECRET_KEY) {
-          return json({
-            success: false,
-            error: "PAYSTACK_SECRET_KEY is missing"
-          }, 500);
-        }
-
-        if (!env.DB) {
-          return json({
-            success: false,
-            error: "D1 database binding DB is missing"
-          }, 500);
-        }
-
-        const body = await request.json();
-
-        const email = String(body.email || "")
-          .trim()
-          .toLowerCase();
-
-        const plan = String(body.plan || "")
-          .trim()
-          .toLowerCase();
-
-        if (!email || !email.includes("@")) {
-          return json({
-            success: false,
-            error: "A valid email address is required"
-          }, 400);
-        }
-
-        if (!PLANS[plan]) {
-          return json({
-            success: false,
-            error: "Invalid subscription plan"
-          }, 400);
-        }
-
-        const selectedPlan = PLANS[plan];
-
-        const reference =
-          `CYBERFX-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
-
-        const callbackUrl =
-          `${url.origin}/api/payment/callback`;
-
-        const paystackResponse = await fetch(
-          "https://api.paystack.co/transaction/initialize",
-          {
-            method: "POST",
-
-            headers: {
-              "Authorization":
-                `Bearer ${env.PAYSTACK_SECRET_KEY}`,
-              "Content-Type":
-                "application/json"
-            },
-
-            body: JSON.stringify({
-              email,
-              amount: selectedPlan.amount,
-              currency: "NGN",
-              reference,
-              callback_url: callbackUrl,
-
-              metadata: {
-                custom_fields: [
-                  {
-                    display_name: "CyberFX Plan",
-                    variable_name: "cyberfx_plan",
-                    value: selectedPlan.name
-                  }
-                ],
-
-                cyberfx_plan: plan,
-                duration_months:
-                  selectedPlan.months
-              }
-            })
-          }
-        );
-
-        const result =
-          await paystackResponse.json();
-
-        if (
-          !paystackResponse.ok ||
-          !result.status ||
-          !result.data
-        ) {
-          console.error(
-            "Paystack initialize error:",
-            result
-          );
-
-          return json({
-            success: false,
-            error:
-              result.message ||
-              "Unable to initialize payment"
-          }, 500);
-        }
-
-        await env.DB.prepare(`
-          INSERT INTO payments (
-            reference,
-            email,
-            plan,
-            amount,
-            status,
-            created_at
-          )
-          VALUES (?, ?, ?, ?, ?, ?)
-        `)
-          .bind(
-            reference,
-            email,
-            plan,
-            selectedPlan.amount / 100,
-            "pending",
-            new Date().toISOString()
-          )
-          .run();
-
-        return json({
-          success: true,
-          engine: "CyberFX",
-          authorization_url:
-            result.data.authorization_url,
-          access_code:
-            result.data.access_code,
-          reference,
-          plan: selectedPlan.name,
-          amount:
-            selectedPlan.amount / 100
-        });
-
-      } catch (error) {
-        console.error(
-          "Payment initialization error:",
-          error
-        );
-
-        return json({
-          success: false,
-          error:
-            error?.message ||
-            String(error)
-        }, 500);
-      }
+      return initializePayment(request, env, url);
     }
 
     // =========================================================
@@ -185,13 +45,6 @@ export default {
       request.method === "GET"
     ) {
       try {
-        if (!env.PAYSTACK_SECRET_KEY) {
-          return json({
-            success: false,
-            error: "PAYSTACK_SECRET_KEY is missing"
-          }, 500);
-        }
-
         const reference =
           url.searchParams.get("reference");
 
@@ -202,13 +55,13 @@ export default {
           }, 400);
         }
 
-        const verification =
+        const result =
           await verifyPaystackPayment(
             reference,
             env
           );
 
-        return json(verification);
+        return json(result);
 
       } catch (error) {
         console.error(
@@ -241,8 +94,7 @@ export default {
           {
             status: 400,
             headers: {
-              "content-type":
-                "text/plain"
+              "content-type": "text/plain"
             }
           }
         );
@@ -257,8 +109,7 @@ export default {
 
         if (
           result.success &&
-          result.payment_status ===
-            "success"
+          result.payment_status === "success"
         ) {
           return Response.redirect(
             `${url.origin}/?payment=success&reference=${encodeURIComponent(reference)}`,
@@ -356,7 +207,10 @@ export default {
     // =========================================================
     // RAW MARKET DATA
     // =========================================================
-    if (url.pathname === "/api/signals") {
+    if (
+      url.pathname === "/api/signals" &&
+      request.method === "GET"
+    ) {
       try {
         if (!env.TWELVE_DATA_API_KEY) {
           return json({
@@ -399,8 +253,8 @@ export default {
     // GENERATE CURRENT SIGNALS
     // =========================================================
     if (
-      url.pathname ===
-      "/api/generate-signals"
+      url.pathname === "/api/generate-signals" &&
+      request.method === "GET"
     ) {
       try {
         const result =
@@ -432,8 +286,7 @@ export default {
     // TELEGRAM WEBHOOK
     // =========================================================
     if (
-      url.pathname ===
-        "/telegram/webhook" &&
+      url.pathname === "/telegram/webhook" &&
       request.method === "POST"
     ) {
       try {
@@ -466,7 +319,19 @@ export default {
     // =========================================================
     // WEBSITE
     // =========================================================
-    return env.ASSETS.fetch(request);
+    if (env.ASSETS) {
+      return env.ASSETS.fetch(request);
+    }
+
+    return new Response(
+      "CyberFX Worker is online.",
+      {
+        status: 200,
+        headers: {
+          "content-type": "text/plain"
+        }
+      }
+    );
   },
 
   // =========================================================
@@ -479,12 +344,48 @@ export default {
   }
 };
 
-
 // ============================================================
 // CYBERFX PLANS
 // ============================================================
+//
+// IMPORTANT:
+// Paystack amounts are in KOBO.
+//
+// ₦10,000  = 1,000,000 kobo
+// ₦30,000  = 3,000,000 kobo
+// ₦60,000  = 6,000,000 kobo
+// ₦120,000 = 12,000,000 kobo
+//
+// The aliases below match the website buttons:
+// monthly / quarterly / biannual / annual
+// ============================================================
 
 const PLANS = {
+  "monthly": {
+    name: "1 Month",
+    months: 1,
+    amount: 1000000
+  },
+
+  "quarterly": {
+    name: "3 Months",
+    months: 3,
+    amount: 3000000
+  },
+
+  "biannual": {
+    name: "6 Months",
+    months: 6,
+    amount: 6000000
+  },
+
+  "annual": {
+    name: "12 Months",
+    months: 12,
+    amount: 12000000
+  },
+
+  // Compatibility aliases
   "1-month": {
     name: "1 Month",
     months: 1,
@@ -510,6 +411,199 @@ const PLANS = {
   }
 };
 
+// ============================================================
+// INITIALIZE PAYMENT
+// ============================================================
+
+async function initializePayment(
+  request,
+  env,
+  url
+) {
+  try {
+    if (!env.PAYSTACK_SECRET_KEY) {
+      return json({
+        success: false,
+        error: "PAYSTACK_SECRET_KEY is missing"
+      }, 500);
+    }
+
+    if (!env.DB) {
+      return json({
+        success: false,
+        error: "D1 database binding DB is missing"
+      }, 500);
+    }
+
+    const body =
+      await request.json();
+
+    const email =
+      String(body.email || "")
+        .trim()
+        .toLowerCase();
+
+    const plan =
+      String(body.plan || "")
+        .trim()
+        .toLowerCase();
+
+    if (
+      !email ||
+      !email.includes("@") ||
+      !email.includes(".")
+    ) {
+      return json({
+        success: false,
+        error: "A valid email address is required"
+      }, 400);
+    }
+
+    if (!PLANS[plan]) {
+      return json({
+        success: false,
+        error:
+          "Invalid subscription plan. Expected monthly, quarterly, biannual or annual."
+      }, 400);
+    }
+
+    const selectedPlan =
+      PLANS[plan];
+
+    const reference =
+      `CYBERFX-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+
+    const callbackUrl =
+      `${url.origin}/api/payment/callback`;
+
+    const paystackResponse =
+      await fetch(
+        "https://api.paystack.co/transaction/initialize",
+        {
+          method: "POST",
+
+          headers: {
+            "Authorization":
+              `Bearer ${env.PAYSTACK_SECRET_KEY}`,
+
+            "Content-Type":
+              "application/json"
+          },
+
+          body:
+            JSON.stringify({
+              email,
+
+              amount:
+                selectedPlan.amount,
+
+              currency:
+                "NGN",
+
+              reference,
+
+              callback_url:
+                callbackUrl,
+
+              metadata: {
+                cyberfx_plan:
+                  plan,
+
+                duration_months:
+                  selectedPlan.months,
+
+                custom_fields: [
+                  {
+                    display_name:
+                      "CyberFX Plan",
+
+                    variable_name:
+                      "cyberfx_plan",
+
+                    value:
+                      selectedPlan.name
+                  }
+                ]
+              }
+            })
+        }
+      );
+
+    const result =
+      await paystackResponse.json();
+
+    if (
+      !paystackResponse.ok ||
+      !result.status ||
+      !result.data
+    ) {
+      console.error(
+        "Paystack initialize error:",
+        result
+      );
+
+      return json({
+        success: false,
+        error:
+          result.message ||
+          "Unable to initialize payment"
+      }, 500);
+    }
+
+    await env.DB.prepare(`
+      INSERT INTO payments (
+        reference,
+        email,
+        plan,
+        amount,
+        status,
+        created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?)
+    `)
+      .bind(
+        reference,
+        email,
+        plan,
+        selectedPlan.amount / 100,
+        "pending",
+        new Date().toISOString()
+      )
+      .run();
+
+    return json({
+      success: true,
+      engine: "CyberFX",
+
+      authorization_url:
+        result.data.authorization_url,
+
+      access_code:
+        result.data.access_code,
+
+      reference,
+
+      plan:
+        selectedPlan.name,
+
+      amount:
+        selectedPlan.amount / 100
+    });
+
+  } catch (error) {
+    console.error(
+      "Payment initialization error:",
+      error
+    );
+
+    return json({
+      success: false,
+      error:
+        error?.message ||
+        String(error)
+    }, 500);
+  }
+}
 
 // ============================================================
 // PAYSTACK VERIFICATION
@@ -567,6 +661,10 @@ async function verifyPaystackPayment(
   const paymentStatus =
     transaction.status;
 
+  // ----------------------------------------------------------
+  // Payment not successful
+  // ----------------------------------------------------------
+
   if (
     paymentStatus !== "success"
   ) {
@@ -589,6 +687,10 @@ async function verifyPaystackPayment(
     };
   }
 
+  // ----------------------------------------------------------
+  // Get customer email
+  // ----------------------------------------------------------
+
   const email =
     String(
       transaction.customer?.email || ""
@@ -604,6 +706,10 @@ async function verifyPaystackPayment(
         "No customer email returned by Paystack"
     };
   }
+
+  // ----------------------------------------------------------
+  // Determine plan
+  // ----------------------------------------------------------
 
   let plan =
     transaction.metadata?.cyberfx_plan;
@@ -642,8 +748,7 @@ async function verifyPaystackPayment(
     PLANS[plan];
 
   // ----------------------------------------------------------
-  // IMPORTANT:
-  // Verify the amount received is exactly the plan amount.
+  // Verify exact amount
   // ----------------------------------------------------------
 
   if (
@@ -665,10 +770,15 @@ async function verifyPaystackPayment(
       success: false,
       payment_status:
         "amount_mismatch",
+
       error:
         "Payment amount does not match the selected plan"
     };
   }
+
+  // ----------------------------------------------------------
+  // Check existing payment
+  // ----------------------------------------------------------
 
   const existingPayment =
     await env.DB.prepare(`
@@ -681,12 +791,11 @@ async function verifyPaystackPayment(
       .first();
 
   // ----------------------------------------------------------
-  // Prevent duplicate subscription extension.
+  // Prevent duplicate extension
   // ----------------------------------------------------------
 
   if (
-    existingPayment?.status ===
-    "success"
+    existingPayment?.status === "success"
   ) {
     const existingSubscription =
       await getActiveSubscription(
@@ -702,14 +811,20 @@ async function verifyPaystackPayment(
       plan,
       plan_name:
         selectedPlan.name,
+
       starts_at:
         existingSubscription?.starts_at ||
         null,
+
       expires_at:
         existingSubscription?.expires_at ||
         null
     };
   }
+
+  // ----------------------------------------------------------
+  // Calculate subscription dates
+  // ----------------------------------------------------------
 
   const now =
     new Date();
@@ -723,9 +838,8 @@ async function verifyPaystackPayment(
   let startDate =
     now;
 
-  // If the customer already has
-  // active time remaining, extend
-  // from the current expiry.
+  // If user already has time remaining,
+  // add the new subscription after expiry.
   if (
     activeSubscription?.expires_at
   ) {
@@ -749,7 +863,7 @@ async function verifyPaystackPayment(
     );
 
   // ----------------------------------------------------------
-  // Mark payment successful.
+  // Mark payment successful
   // ----------------------------------------------------------
 
   await env.DB.prepare(`
@@ -771,7 +885,7 @@ async function verifyPaystackPayment(
     .run();
 
   // ----------------------------------------------------------
-  // Create/update subscription.
+  // Create / update subscription
   // ----------------------------------------------------------
 
   await env.DB.prepare(`
@@ -796,7 +910,8 @@ async function verifyPaystackPayment(
       status = excluded.status,
       payment_reference =
         excluded.payment_reference,
-      updated_at = excluded.updated_at
+      updated_at =
+        excluded.updated_at
   `)
     .bind(
       email,
@@ -817,15 +932,17 @@ async function verifyPaystackPayment(
     reference,
     email,
     plan,
+
     plan_name:
       selectedPlan.name,
+
     starts_at:
       startDate.toISOString(),
+
     expires_at:
       expires.toISOString()
   };
 }
-
 
 // ============================================================
 // ACTIVE SUBSCRIPTION
@@ -865,8 +982,7 @@ async function getActiveSubscription(
     );
 
   if (
-    subscription.status !==
-      "active" ||
+    subscription.status !== "active" ||
     !Number.isFinite(
       expiry.getTime()
     ) ||
@@ -874,8 +990,9 @@ async function getActiveSubscription(
   ) {
     await env.DB.prepare(`
       UPDATE subscriptions
-      SET status = ?,
-          updated_at = ?
+      SET
+        status = ?,
+        updated_at = ?
       WHERE email = ?
     `)
       .bind(
@@ -890,7 +1007,6 @@ async function getActiveSubscription(
 
   return subscription;
 }
-
 
 // ============================================================
 // ADD MONTHS
@@ -932,9 +1048,8 @@ function addMonths(
   return result;
 }
 
-
 // ============================================================
-// CONFIGURATION
+// MARKET CONFIGURATION
 // ============================================================
 
 const INSTRUMENTS = {
@@ -976,12 +1091,13 @@ const ENTRY_TIMEFRAMES = [
 
 const CONFIRMED_SCORE = 13;
 
-
 // ============================================================
 // LOAD MARKET DATA
 // ============================================================
 
-async function loadAllMarkets(env) {
+async function loadAllMarkets(
+  env
+) {
   if (!env.TWELVE_DATA_API_KEY) {
     throw new Error(
       "TWELVE_DATA_API_KEY is missing"
@@ -1012,7 +1128,6 @@ async function loadAllMarkets(env) {
 
   return data;
 }
-
 
 // ============================================================
 // TWELVE DATA
@@ -1061,9 +1176,11 @@ async function getCandles(
     ) {
       return {
         status: "error",
+
         code:
           result.code ||
           response.status,
+
         message:
           result.message ||
           "Twelve Data request failed"
@@ -1072,10 +1189,13 @@ async function getCandles(
 
     return {
       status: "success",
+
       symbol:
         result.meta?.symbol ||
         symbol,
+
       interval,
+
       candles:
         result.values || []
     };
@@ -1083,6 +1203,7 @@ async function getCandles(
   } catch (error) {
     return {
       status: "error",
+
       message:
         error?.message ||
         String(error)
@@ -1090,12 +1211,13 @@ async function getCandles(
   }
 }
 
-
 // ============================================================
 // MAIN SIGNAL ENGINE
 // ============================================================
 
-async function generateSignals(env) {
+async function generateSignals(
+  env
+) {
   const marketData =
     await loadAllMarkets(env);
 
@@ -1152,7 +1274,6 @@ async function generateSignals(env) {
   return results;
 }
 
-
 // ============================================================
 // ANALYSIS
 // ============================================================
@@ -1167,11 +1288,9 @@ function analyzeInstrument(
 
   if (
     !entryData ||
-    entryData.status !==
-      "success" ||
+    entryData.status !== "success" ||
     !entryData.candles ||
-    entryData.candles.length <
-      30
+    entryData.candles.length < 30
   ) {
     return null;
   }
@@ -1189,7 +1308,9 @@ function analyzeInstrument(
   }
 
   const htfBias =
-    determineHTFBias(market);
+    determineHTFBias(
+      market
+    );
 
   if (
     htfBias === "neutral"
@@ -1198,7 +1319,9 @@ function analyzeInstrument(
   }
 
   const structure =
-    detectStructure(closed);
+    detectStructure(
+      closed
+    );
 
   if (
     structure.direction !==
@@ -1346,8 +1469,13 @@ function analyzeInstrument(
     return null;
   }
 
+  // ==========================================================
+  // IMPORTANT:
+  // CyberFX target is now exactly 1:6
+  // ==========================================================
+
   const reward =
-    risk * 3;
+    risk * 6;
 
   const takeProfit =
     structureBreak.direction ===
@@ -1418,9 +1546,11 @@ function analyzeInstrument(
     takeProfit:
       roundPrice(takeProfit),
 
-    riskReward: "2:6",
+    riskReward:
+      "1:6",
 
-    status: "CONFIRMED",
+    status:
+      "CONFIRMED",
 
     internal: {
       score,
@@ -1437,7 +1567,6 @@ function analyzeInstrument(
     }
   };
 }
-
 
 // ============================================================
 // CANDLE NORMALIZATION
@@ -1466,7 +1595,6 @@ function normalizeCandles(
         new Date(b.time)
     );
 }
-
 
 // ============================================================
 // ATR
@@ -1518,7 +1646,6 @@ function ATR(
 
   return average(ranges);
 }
-
 
 // ============================================================
 // MARKET STRUCTURE
@@ -1622,7 +1749,6 @@ function detectStructure(
   };
 }
 
-
 // ============================================================
 // HIGHER TIMEFRAME BIAS
 // ============================================================
@@ -1647,8 +1773,7 @@ function determineHTFBias(
 
     if (
       !data ||
-      data.status !==
-        "success"
+      data.status !== "success"
     ) {
       continue;
     }
@@ -1694,7 +1819,6 @@ function determineHTFBias(
 
   return "neutral";
 }
-
 
 // ============================================================
 // ACCUMULATION
@@ -1783,7 +1907,6 @@ function detectAccumulation(
   };
 }
 
-
 // ============================================================
 // CRT
 // ============================================================
@@ -1810,8 +1933,10 @@ function detectCRT(
 
   if (
     !range ||
-    (atr &&
-      range < atr * 0.15)
+    (
+      atr &&
+      range < atr * 0.15
+    )
   ) {
     return null;
   }
@@ -1827,7 +1952,6 @@ function detectCRT(
       reference.time
   };
 }
-
 
 // ============================================================
 // LIQUIDITY SWEEP
@@ -1924,7 +2048,6 @@ function detectLiquiditySweep(
   return null;
 }
 
-
 // ============================================================
 // DISPLACEMENT
 // ============================================================
@@ -1984,9 +2107,10 @@ function detectDisplacement(
     body / range;
 
   const closeLocation =
-    (current.close -
-      current.low) /
-    range;
+    (
+      current.close -
+      current.low
+    ) / range;
 
   const bullish =
     current.close >
@@ -1997,12 +2121,10 @@ function detectDisplacement(
     current.open;
 
   const bullishExtreme =
-    closeLocation >=
-    0.75;
+    closeLocation >= 0.75;
 
   const bearishExtreme =
-    closeLocation <=
-    0.25;
+    closeLocation <= 0.25;
 
   const validBody =
     body >=
@@ -2012,8 +2134,7 @@ function detectDisplacement(
     bodyRatio >= 0.60;
 
   if (
-    sweep.direction ===
-      "bullish" &&
+    sweep.direction === "bullish" &&
     bullish &&
     bullishExtreme &&
     validBody &&
@@ -2028,8 +2149,7 @@ function detectDisplacement(
   }
 
   if (
-    sweep.direction ===
-      "bearish" &&
+    sweep.direction === "bearish" &&
     bearish &&
     bearishExtreme &&
     validBody &&
@@ -2045,7 +2165,6 @@ function detectDisplacement(
 
   return null;
 }
-
 
 // ============================================================
 // BOS / MSS
@@ -2129,7 +2248,6 @@ function detectBOSMSS(
   return null;
 }
 
-
 // ============================================================
 // IMPULSE LEG
 // ============================================================
@@ -2165,7 +2283,6 @@ function getImpulseLeg(
       structureBreak.level
   };
 }
-
 
 // ============================================================
 // FIBONACCI
@@ -2222,7 +2339,6 @@ function calculateFib(
       range * 0.618
   };
 }
-
 
 // ============================================================
 // ORDER BLOCK
@@ -2306,7 +2422,6 @@ function findOrderBlock(
   return null;
 }
 
-
 // ============================================================
 // FVG
 // ============================================================
@@ -2362,7 +2477,6 @@ function findFVG(
 
   return null;
 }
-
 
 // ============================================================
 // HEALTHY PULLBACK
@@ -2445,7 +2559,6 @@ function validatePullback(
   };
 }
 
-
 // ============================================================
 // ENTRY
 // ============================================================
@@ -2501,7 +2614,6 @@ function determineEntry(
 
   return candidates[0];
 }
-
 
 // ============================================================
 // STOP LOSS
@@ -2568,7 +2680,6 @@ function determineStopLoss(
   return sl;
 }
 
-
 // ============================================================
 // OPPOSING LIQUIDITY
 // ============================================================
@@ -2626,7 +2737,6 @@ function blockedByOpposingLiquidity(
 
   return false;
 }
-
 
 // ============================================================
 // CONFIRMATION SCORE
@@ -2688,7 +2798,6 @@ function calculateScore(x) {
   return score;
 }
 
-
 // ============================================================
 // AUTOMATIC TELEGRAM SCANNER
 // ============================================================
@@ -2745,7 +2854,6 @@ async function runAutomaticScan(
     );
   }
 }
-
 
 // ============================================================
 // TELEGRAM MESSAGE HANDLER
@@ -2841,7 +2949,6 @@ You will receive confirmed trading signals here when available.`;
   }
 }
 
-
 // ============================================================
 // TELEGRAM OUTPUT
 // ============================================================
@@ -2861,11 +2968,10 @@ Stop Loss: ${signal.stopLoss}
 
 Take Profit: ${signal.takeProfit}
 
-Risk/Reward: 2:6
+Risk/Reward: 1:6
 
 ✅ CONFIRMED`;
 }
-
 
 // ============================================================
 // TELEGRAM API
@@ -2902,7 +3008,6 @@ async function sendTelegramMessage(
   return response.json();
 }
 
-
 // ============================================================
 // HELPERS
 // ============================================================
@@ -2922,14 +3027,12 @@ function average(
   );
 }
 
-
 function midpoint(
   a,
   b
 ) {
   return (a + b) / 2;
 }
-
 
 function priceInside(
   price,
@@ -2945,7 +3048,6 @@ function priceInside(
   );
 }
 
-
 function roundPrice(
   price
 ) {
@@ -2960,7 +3062,6 @@ function roundPrice(
   );
 }
 
-
 function formatTF(
   tf
 ) {
@@ -2974,7 +3075,6 @@ function formatTF(
 
   return names[tf] || tf;
 }
-
 
 // ============================================================
 // JSON RESPONSE
