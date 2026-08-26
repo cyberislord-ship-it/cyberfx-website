@@ -1,630 +1,679 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-    <title>Dashboard | CyberFX</title>
+<title>CyberFX Dashboard</title>
 
-    <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
+<style>
+*{
+    box-sizing:border-box;
+    margin:0;
+    padding:0;
+}
 
-        body {
-            font-family: Arial, sans-serif;
-            background: #05070d;
-            color: white;
-            min-height: 100vh;
-        }
+body{
+    font-family:Arial,sans-serif;
+    background:#05070d;
+    color:white;
+    min-height:100vh;
+}
 
-        /* NAVIGATION */
+nav{
+    height:68px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:0 6%;
+    background:#080b14;
+    border-bottom:1px solid #172033;
+}
 
-        nav {
-            height: 72px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 0 7%;
-            background: #080b14;
-            border-bottom: 1px solid #151b2b;
-        }
+.logo{
+    font-size:24px;
+    font-weight:bold;
+}
 
-        .logo {
-            font-size: 25px;
-            font-weight: bold;
-        }
+.logo span{
+    color:#00e5ff;
+}
 
-        .logo span {
-            color: #00e5ff;
-        }
+.menu{
+    position:relative;
+}
 
-        .menu {
-            position: relative;
-        }
+.menu-btn{
+    background:none;
+    border:0;
+    color:white;
+    font-size:28px;
+    cursor:pointer;
+    padding:4px 10px;
+}
 
-        .menu-button {
-            background: transparent;
-            border: none;
-            color: white;
-            font-size: 28px;
-            cursor: pointer;
-            padding: 5px 10px;
-        }
+.menu-box{
+    display:none;
+    position:absolute;
+    right:0;
+    top:43px;
+    width:190px;
+    background:#0b101c;
+    border:1px solid #1b2940;
+    border-radius:10px;
+    padding:7px;
+    z-index:99;
+}
 
-        .menu-content {
-            display: none;
-            position: absolute;
-            right: 0;
-            top: 45px;
-            width: 210px;
-            background: #0b101c;
-            border: 1px solid #1c2940;
-            border-radius: 12px;
-            padding: 8px;
-            box-shadow: 0 15px 35px rgba(0,0,0,0.45);
-            z-index: 1000;
-        }
+.menu-box.show{
+    display:block;
+}
 
-        .menu-content.show {
-            display: block;
-        }
+.menu-box a,
+.menu-box button{
+    width:100%;
+    display:block;
+    border:0;
+    background:none;
+    color:white;
+    text-decoration:none;
+    text-align:left;
+    padding:11px;
+    border-radius:7px;
+    cursor:pointer;
+    font-size:14px;
+}
 
-        .menu-content a,
-        .menu-content button {
-            width: 100%;
-            display: block;
-            padding: 12px 14px;
-            color: white;
-            background: transparent;
-            border: none;
-            text-decoration: none;
-            text-align: left;
-            border-radius: 8px;
-            font-size: 15px;
-            cursor: pointer;
-        }
+.menu-box a:hover,
+.menu-box button:hover{
+    background:#121b2c;
+    color:#00e5ff;
+}
 
-        .menu-content a:hover,
-        .menu-content button:hover {
-            background: #111a2b;
-            color: #00e5ff;
-        }
+.logout{
+    color:#ff6464!important;
+    border-top:1px solid #1b2940!important;
+    margin-top:5px;
+}
 
-        .logout {
-            border-top: 1px solid #1c2940 !important;
-            margin-top: 6px;
-            color: #ff5c5c !important;
-        }
+main{
+    width:100%;
+    max-width:1100px;
+    margin:auto;
+    padding:35px 6%;
+}
 
-        /* MAIN */
+.welcome{
+    margin-bottom:25px;
+}
 
-        main {
-            padding: 45px 7%;
-        }
+.welcome h1{
+    font-size:30px;
+    margin-bottom:5px;
+}
 
-        .welcome {
-            margin-bottom: 30px;
-        }
+.welcome h1 span{
+    color:#00e5ff;
+}
 
-        .welcome h1 {
-            font-size: 34px;
-            margin-bottom: 8px;
-        }
+.welcome p{
+    color:#8d98ab;
+    font-size:14px;
+}
 
-        .welcome h1 span {
-            color: #00e5ff;
-        }
+.account{
+    background:#0b101c;
+    border:1px solid #172033;
+    border-radius:12px;
+    padding:18px;
+    margin-bottom:28px;
+}
 
-        .welcome p {
-            color: #8f9aae;
-        }
+.account-title{
+    color:#00e5ff;
+    font-weight:bold;
+    margin-bottom:14px;
+}
 
-        /* ACCOUNT CARD */
+.account-grid{
+    display:grid;
+    grid-template-columns:repeat(3,1fr);
+    gap:10px;
+}
 
-        .account {
-            background: #0b101c;
-            border: 1px solid #172033;
-            border-radius: 14px;
-            padding: 22px;
-            margin-bottom: 25px;
-        }
+.account-item{
+    background:#080d17;
+    border-radius:8px;
+    padding:11px;
+}
 
-        .account h2 {
-            color: #00e5ff;
-            font-size: 19px;
-            margin-bottom: 15px;
-        }
+.account-item small{
+    display:block;
+    color:#727d91;
+    margin-bottom:3px;
+}
 
-        .account-row {
-            display: flex;
-            justify-content: space-between;
-            padding: 10px 0;
-            border-bottom: 1px solid #151d2d;
-        }
+.account-item strong{
+    font-size:14px;
+}
 
-        .account-row:last-child {
-            border-bottom: none;
-        }
+.active{
+    color:#53e3b6;
+}
 
-        .label {
-            color: #7f899d;
-        }
+.section-title{
+    font-size:22px;
+    margin-bottom:17px;
+}
 
-        .value {
-            font-weight: bold;
-        }
+.signals{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(250px,1fr));
+    gap:16px;
+}
 
-        .active {
-            color: #56f0c5;
-        }
+.signal-card{
+    background:#0b101c;
+    border:1px solid #172033;
+    border-radius:12px;
+    padding:18px;
+}
 
-        /* SIGNALS */
+.signal-header{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-bottom:15px;
+}
 
-        .section-title {
-            font-size: 25px;
-            margin: 35px 0 20px;
-        }
+.signal-header h3{
+    font-size:18px;
+}
 
-        .cards {
-            display: grid;
-            grid-template-columns: repeat(
-                auto-fit,
-                minmax(230px, 1fr)
-            );
-            gap: 18px;
-        }
+.waiting{
+    font-size:11px;
+    background:#151c2a;
+    color:#929db0;
+    padding:5px 8px;
+    border-radius:5px;
+}
 
-        .card {
-            background: #0b101c;
-            border: 1px solid #172033;
-            border-radius: 13px;
-            padding: 22px;
-        }
+.direction{
+    font-size:25px;
+    font-weight:bold;
+    margin-bottom:14px;
+}
 
-        .card h3 {
-            color: #00e5ff;
-            margin-bottom: 12px;
-        }
+.neutral{
+    color:#9aa4b7;
+}
 
-        .status {
-            display: inline-block;
-            margin-top: 10px;
-            padding: 6px 10px;
-            border-radius: 6px;
-            background: #111a2b;
-            color: #8f9aae;
-            font-size: 12px;
-        }
+.signal-row{
+    display:flex;
+    justify-content:space-between;
+    padding:8px 0;
+    border-bottom:1px solid #151d2d;
+    font-size:13px;
+}
 
-        .card p {
-            color: #aab3c5;
-            font-size: 14px;
-        }
+.signal-row:last-child{
+    border-bottom:0;
+}
 
-        /* QUICK ACTIONS */
+.signal-row span:first-child{
+    color:#737e92;
+}
 
-        .action {
-            display: block;
-            text-align: center;
-            text-decoration: none;
-            background: #00e5ff;
-            color: #05070d;
-            padding: 13px;
-            border-radius: 8px;
-            font-weight: bold;
-            margin-top: 10px;
-        }
+.signal-row span:last-child{
+    font-weight:bold;
+}
 
-        /* FOOTER */
+.no-signal{
+    color:#8e98aa;
+    font-size:13px;
+    line-height:1.6;
+}
 
-        footer {
-            text-align: center;
-            padding: 30px;
-            margin-top: 30px;
-            background: #080b14;
-            color: #7f899d;
-        }
+.telegram{
+    margin-top:30px;
+    background:#0b101c;
+    border:1px solid #172033;
+    border-radius:12px;
+    padding:20px;
+    text-align:center;
+}
 
-        /* MOBILE */
+.telegram h2{
+    font-size:20px;
+    margin-bottom:7px;
+}
 
-        @media (max-width: 600px) {
+.telegram p{
+    color:#8d98ab;
+    font-size:13px;
+    margin-bottom:15px;
+}
 
-            nav {
-                padding: 0 5%;
-            }
+.telegram-btn{
+    display:inline-block;
+    background:#00e5ff;
+    color:#05070d;
+    text-decoration:none;
+    padding:11px 20px;
+    border-radius:7px;
+    font-weight:bold;
+    font-size:14px;
+}
 
-            main {
-                padding: 35px 5%;
-            }
+footer{
+    text-align:center;
+    color:#697488;
+    padding:28px;
+    margin-top:25px;
+    font-size:12px;
+}
 
-            .welcome h1 {
-                font-size: 28px;
-            }
+@media(max-width:600px){
 
-            .account-row {
-                font-size: 14px;
-            }
-        }
-    </style>
+    nav{
+        padding:0 5%;
+    }
+
+    main{
+        padding:28px 5%;
+    }
+
+    .welcome h1{
+        font-size:26px;
+    }
+
+    .account-grid{
+        grid-template-columns:1fr;
+    }
+
+    .signals{
+        grid-template-columns:1fr;
+    }
+}
+</style>
 </head>
 
 <body>
 
-    <!-- NAVIGATION -->
+<nav>
 
-    <nav>
+    <div class="logo">
+        Cyber<span>FX</span>
+    </div>
 
-        <div class="logo">
-            Cyber<span>FX</span>
-        </div>
+    <div class="menu">
 
-        <div class="menu">
+        <button
+            class="menu-btn"
+            onclick="toggleMenu()"
+        >
+            ⋮
+        </button>
+
+        <div
+            id="menuBox"
+            class="menu-box"
+        >
+
+            <a href="index.html">
+                🏠 Home
+            </a>
+
+            <a href="dashboard.html">
+                📊 Dashboard
+            </a>
+
+            <a href="index.html#plans">
+                💳 Plans
+            </a>
+
+            <a
+                href="https://t.me/CyberTradingSignalsBot"
+                target="_blank"
+            >
+                ✈️ Telegram
+            </a>
 
             <button
-                class="menu-button"
-                onclick="toggleMenu()"
-                aria-label="Open menu"
+                class="logout"
+                onclick="logout()"
             >
-                ⋮
+                🚪 Logout
             </button>
 
-            <div
-                id="menuContent"
-                class="menu-content"
-            >
+        </div>
 
-                <a href="index.html">
-                    🏠 Home
-                </a>
+    </div>
 
-                <a href="dashboard.html">
-                    📊 Dashboard
-                </a>
+</nav>
 
-                <a href="index.html#signals">
-                    📈 Signals
-                </a>
 
-                <a href="index.html#plans">
-                    💳 Plans
-                </a>
+<main>
 
-                <a
-                    href="https://t.me/CyberTradingSignalsBot"
-                    target="_blank"
-                >
-                    ✈️ Telegram
-                </a>
+    <div class="welcome">
 
-                <button
-                    class="logout"
-                    onclick="logout()"
-                >
-                    🚪 Logout
-                </button>
+        <h1>
+            Welcome,
+            <span id="userName">Trader</span>
+        </h1>
 
+        <p>
+            CyberFX confirmed-market signal dashboard
+        </p>
+
+    </div>
+
+
+    <div class="account">
+
+        <div class="account-title">
+            Account Overview
+        </div>
+
+        <div class="account-grid">
+
+            <div class="account-item">
+                <small>Name</small>
+                <strong id="accountName">—</strong>
+            </div>
+
+            <div class="account-item">
+                <small>Email</small>
+                <strong id="accountEmail">—</strong>
+            </div>
+
+            <div class="account-item">
+                <small>Status</small>
+                <strong class="active">
+                    Active
+                </strong>
             </div>
 
         </div>
 
-    </nav>
+    </div>
 
 
-    <!-- DASHBOARD -->
+    <h2 class="section-title">
+        Latest Signals
+    </h2>
 
-    <main>
 
-        <div class="welcome">
+    <div class="signals">
 
-            <h1>
-                Welcome,
-                <span id="userName">
-                    Trader
+
+        <!-- GOLD -->
+
+        <div class="signal-card">
+
+            <div class="signal-header">
+
+                <h3>
+                    XAUUSD
+                </h3>
+
+                <span class="waiting">
+                    WAITING
                 </span>
-            </h1>
 
-            <p>
-                Welcome to your CyberFX trading dashboard.
+            </div>
+
+            <div class="direction neutral">
+                NO SIGNAL
+            </div>
+
+            <p class="no-signal">
+                No confirmed setup currently available.
+                CyberFX will not publish a trade until
+                the required conditions are confirmed.
             </p>
 
-        </div>
-
-
-        <!-- ACCOUNT -->
-
-        <div class="account">
-
-            <h2>
-                Account Overview
-            </h2>
-
-            <div class="account-row">
-
-                <span class="label">
-                    Name
-                </span>
-
-                <span
-                    class="value"
-                    id="accountName"
-                >
-                    —
-                </span>
-
+            <div class="signal-row">
+                <span>Entry</span>
+                <span>—</span>
             </div>
 
-            <div class="account-row">
-
-                <span class="label">
-                    Email
-                </span>
-
-                <span
-                    class="value"
-                    id="accountEmail"
-                >
-                    —
-                </span>
-
+            <div class="signal-row">
+                <span>Stop Loss</span>
+                <span>—</span>
             </div>
 
-            <div class="account-row">
-
-                <span class="label">
-                    Plan
-                </span>
-
-                <span class="value">
-                    Free
-                </span>
-
+            <div class="signal-row">
+                <span>Take Profit</span>
+                <span>—</span>
             </div>
 
-            <div class="account-row">
-
-                <span class="label">
-                    Account Status
-                </span>
-
-                <span class="value active">
-                    Active
-                </span>
-
+            <div class="signal-row">
+                <span>Entry TF</span>
+                <span>—</span>
             </div>
 
         </div>
 
 
-        <!-- SIGNALS -->
+        <!-- BTC -->
 
-        <h2 class="section-title">
-            Latest Signals
+        <div class="signal-card">
+
+            <div class="signal-header">
+
+                <h3>
+                    BTCUSD
+                </h3>
+
+                <span class="waiting">
+                    WAITING
+                </span>
+
+            </div>
+
+            <div class="direction neutral">
+                NO SIGNAL
+            </div>
+
+            <p class="no-signal">
+                No confirmed setup currently available.
+                CyberFX will not publish a trade until
+                the required conditions are confirmed.
+            </p>
+
+            <div class="signal-row">
+                <span>Entry</span>
+                <span>—</span>
+            </div>
+
+            <div class="signal-row">
+                <span>Stop Loss</span>
+                <span>—</span>
+            </div>
+
+            <div class="signal-row">
+                <span>Take Profit</span>
+                <span>—</span>
+            </div>
+
+            <div class="signal-row">
+                <span>Entry TF</span>
+                <span>—</span>
+            </div>
+
+        </div>
+
+
+        <!-- NASDAQ -->
+
+        <div class="signal-card">
+
+            <div class="signal-header">
+
+                <h3>
+                    NAS100
+                </h3>
+
+                <span class="waiting">
+                    WAITING
+                </span>
+
+            </div>
+
+            <div class="direction neutral">
+                NO SIGNAL
+            </div>
+
+            <p class="no-signal">
+                No confirmed setup currently available.
+                CyberFX will not publish a trade until
+                the required conditions are confirmed.
+            </p>
+
+            <div class="signal-row">
+                <span>Entry</span>
+                <span>—</span>
+            </div>
+
+            <div class="signal-row">
+                <span>Stop Loss</span>
+                <span>—</span>
+            </div>
+
+            <div class="signal-row">
+                <span>Take Profit</span>
+                <span>—</span>
+            </div>
+
+            <div class="signal-row">
+                <span>Entry TF</span>
+                <span>—</span>
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <div class="telegram">
+
+        <h2>
+            CyberFX Telegram
         </h2>
 
-        <div class="cards">
+        <p>
+            Receive CyberFX signals and updates directly
+            through Telegram.
+        </p>
 
-            <div class="card">
+        <a
+            class="telegram-btn"
+            href="https://t.me/CyberTradingSignalsBot"
+            target="_blank"
+        >
+            Open Telegram
+        </a>
 
-                <h3>
-                    XAUUSD — Gold
-                </h3>
+    </div>
 
-                <p>
-                    No confirmed setup at the moment.
-                </p>
-
-                <span class="status">
-                    WAITING
-                </span>
-
-            </div>
-
-
-            <div class="card">
-
-                <h3>
-                    BTCUSD — Bitcoin
-                </h3>
-
-                <p>
-                    No confirmed setup at the moment.
-                </p>
-
-                <span class="status">
-                    WAITING
-                </span>
-
-            </div>
+</main>
 
 
-            <div class="card">
-
-                <h3>
-                    NAS100 — Nasdaq
-                </h3>
-
-                <p>
-                    No confirmed setup at the moment.
-                </p>
-
-                <span class="status">
-                    WAITING
-                </span>
-
-            </div>
-
-        </div>
+<footer>
+    © 2026 CyberFX. All rights reserved.
+</footer>
 
 
-        <!-- QUICK ACTIONS -->
+<script>
 
-        <h2 class="section-title">
-            Quick Actions
-        </h2>
+const loggedIn =
+    localStorage.getItem("cyberfxLoggedIn");
 
-        <div class="cards">
-
-            <div class="card">
-
-                <h3>
-                    Premium Signals
-                </h3>
-
-                <p>
-                    Upgrade your account to access
-                    premium CyberFX signals.
-                </p>
-
-                <a
-                    href="index.html#plans"
-                    class="action"
-                >
-                    View Plans
-                </a>
-
-            </div>
+const savedUser =
+    localStorage.getItem("cyberfxUser");
 
 
-            <div class="card">
-
-                <h3>
-                    Telegram
-                </h3>
-
-                <p>
-                    Get CyberFX updates and signals
-                    through Telegram.
-                </p>
-
-                <a
-                    href="https://t.me/CyberTradingSignalsBot"
-                    target="_blank"
-                    class="action"
-                >
-                    Open Telegram
-                </a>
-
-            </div>
-
-        </div>
-
-    </main>
+if(
+    loggedIn !== "true" ||
+    !savedUser
+){
+    window.location.href =
+        "login.html";
+}
 
 
-    <footer>
+if(savedUser){
 
-        © 2026 CyberFX. All rights reserved.
+    const user =
+        JSON.parse(savedUser);
 
-    </footer>
+    document.getElementById(
+        "userName"
+    ).textContent =
+        user.name || "Trader";
 
+    document.getElementById(
+        "accountName"
+    ).textContent =
+        user.name || "—";
 
-    <script>
-
-        /* CHECK LOGIN */
-
-        const loggedIn =
-            localStorage.getItem("cyberfxLoggedIn");
-
-        const savedUser =
-            localStorage.getItem("cyberfxUser");
-
-
-        if (
-            loggedIn !== "true" ||
-            !savedUser
-        ) {
-
-            window.location.href =
-                "login.html";
-
-        }
+    document.getElementById(
+        "accountEmail"
+    ).textContent =
+        user.email || "—";
+}
 
 
-        /* LOAD USER */
+function toggleMenu(){
 
-        if (savedUser) {
+    document
+        .getElementById("menuBox")
+        .classList
+        .toggle("show");
+}
 
-            const user =
-                JSON.parse(savedUser);
 
+function logout(){
+
+    localStorage.removeItem(
+        "cyberfxLoggedIn"
+    );
+
+    window.location.href =
+        "login.html";
+}
+
+
+window.addEventListener(
+    "click",
+    function(event){
+
+        const menu =
             document.getElementById(
-                "userName"
-            ).textContent =
-                user.name;
-
-            document.getElementById(
-                "accountName"
-            ).textContent =
-                user.name;
-
-            document.getElementById(
-                "accountEmail"
-            ).textContent =
-                user.email;
-
-        }
-
-
-        /* MENU */
-
-        function toggleMenu() {
-
-            const menu =
-                document.getElementById(
-                    "menuContent"
-                );
-
-            menu.classList.toggle("show");
-
-        }
-
-
-        /* LOGOUT */
-
-        function logout() {
-
-            localStorage.removeItem(
-                "cyberfxLoggedIn"
+                "menuBox"
             );
 
-            window.location.href =
-                "login.html";
+        const button =
+            document.querySelector(
+                ".menu-btn"
+            );
+
+        if(
+            !menu.contains(event.target) &&
+            !button.contains(event.target)
+        ){
+
+            menu.classList.remove(
+                "show"
+            );
 
         }
 
+    }
+);
 
-        /* CLOSE MENU */
-
-        window.addEventListener(
-            "click",
-            function(event) {
-
-                const menu =
-                    document.getElementById(
-                        "menuContent"
-                    );
-
-                const button =
-                    document.querySelector(
-                        ".menu-button"
-                    );
-
-                if (
-                    !menu.contains(event.target) &&
-                    !button.contains(event.target)
-                ) {
-
-                    menu.classList.remove("show");
-
-                }
-
-            }
-        );
-
-    </script>
+</script>
 
 </body>
 </html>
