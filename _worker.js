@@ -26,12 +26,35 @@ export default {
           );
         }
       }
+      return json({ success: true });
+    }
+    // =========================
+    // TELEGRAM WEBHOOK SETUP
+    // =========================
+    if (url.pathname === "/telegram/setup") {
+      if (!env.TELEGRAM_BOT_TOKEN) {
+        return json({
+          success: false,
+          error: "TELEGRAM_BOT_TOKEN is missing"
+        }, 500);
+      }
+      const webhookUrl =
+        "https://cyberfx-website.cybertradingsignal.workers.dev/telegram/webhook";
+      const result = await telegramRequest(
+        env.TELEGRAM_BOT_TOKEN,
+        "setWebhook",
+        {
+          url: webhookUrl
+        }
+      );
       return json({
-        success: true
+        success: true,
+        webhook_url: webhookUrl,
+        telegram: result
       });
     }
     // =========================
-    // TELEGRAM WEBHOOK TEST
+    // TELEGRAM TEST
     // =========================
     if (url.pathname === "/telegram/test") {
       if (!env.TELEGRAM_BOT_TOKEN) {
