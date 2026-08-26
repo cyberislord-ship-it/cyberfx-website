@@ -1,5 +1,7 @@
 name = "cyberfx-website"
 
+main = "_worker.js"
+
 compatibility_date = "2026-08-26"
 
 [assets]
