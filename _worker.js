@@ -19,7 +19,7 @@ export default {
     }
 
     // =========================================================
-    // PAYSTACK - INITIALIZE PAYMENT
+    // PAYMENT INITIALIZE
     // =========================================================
     if (
       url.pathname === "/api/payment/initialize" &&
@@ -77,7 +77,7 @@ export default {
           {
             method: "POST",
             headers: {
-              "Authorization":
+              Authorization:
                 `Bearer ${env.PAYSTACK_SECRET_KEY}`,
               "Content-Type":
                 "application/json"
@@ -89,15 +89,9 @@ export default {
               reference,
               callback_url: callbackUrl,
               metadata: {
-                custom_fields: [
-                  {
-                    display_name: "CyberFX Plan",
-                    variable_name: "cyberfx_plan",
-                    value: selectedPlan.name
-                  }
-                ],
                 cyberfx_plan: plan,
-                duration_months: selectedPlan.months
+                duration_months:
+                  selectedPlan.months
               }
             })
           }
@@ -111,11 +105,6 @@ export default {
           !result.status ||
           !result.data
         ) {
-          console.error(
-            "Paystack initialize error:",
-            result
-          );
-
           return json({
             success: false,
             error:
@@ -127,20 +116,20 @@ export default {
         await env.DB.prepare(`
           INSERT INTO payments (
             reference,
-            email,
-            plan,
             amount,
+            plan,
             status,
+            email,
             created_at
           )
           VALUES (?, ?, ?, ?, ?, ?)
         `)
           .bind(
             reference,
-            email,
-            plan,
             selectedPlan.amount / 100,
+            plan,
             "pending",
+            email,
             new Date().toISOString()
           )
           .run();
@@ -153,7 +142,7 @@ export default {
           access_code:
             result.data.access_code,
           reference,
-          plan: selectedPlan.name,
+          plan,
           amount:
             selectedPlan.amount / 100
         });
@@ -174,7 +163,7 @@ export default {
     }
 
     // =========================================================
-    // PAYSTACK - VERIFY PAYMENT
+    // PAYMENT VERIFY
     // =========================================================
     if (
       url.pathname === "/api/payment/verify" &&
@@ -191,13 +180,12 @@ export default {
           }, 400);
         }
 
-        const result =
+        return json(
           await verifyPaystackPayment(
             reference,
             env
-          );
-
-        return json(result);
+          )
+        );
 
       } catch (error) {
         console.error(
@@ -215,7 +203,7 @@ export default {
     }
 
     // =========================================================
-    // PAYSTACK CALLBACK
+    // PAYMENT CALLBACK
     // =========================================================
     if (
       url.pathname === "/api/payment/callback" &&
@@ -230,7 +218,8 @@ export default {
           {
             status: 400,
             headers: {
-              "content-type": "text/plain"
+              "content-type":
+                "text/plain"
             }
           }
         );
@@ -245,7 +234,8 @@ export default {
 
         if (
           result.success &&
-          result.payment_status === "success"
+          result.payment_status ===
+            "success"
         ) {
           return Response.redirect(
             `${url.origin}/?payment=success&reference=${encodeURIComponent(reference)}`,
@@ -259,11 +249,6 @@ export default {
         );
 
       } catch (error) {
-        console.error(
-          "Payment callback error:",
-          error
-        );
-
         return Response.redirect(
           `${url.origin}/?payment=failed`,
           302
@@ -272,7 +257,7 @@ export default {
     }
 
     // =========================================================
-    // CHECK SUBSCRIPTION
+    // SUBSCRIPTION CHECK
     // =========================================================
     if (
       url.pathname === "/api/subscription" &&
@@ -282,13 +267,15 @@ export default {
         if (!env.DB) {
           return json({
             success: false,
-            error: "D1 database binding DB is missing"
+            error:
+              "D1 database binding DB is missing"
           }, 500);
         }
 
         const email =
           String(
-            url.searchParams.get("email") || ""
+            url.searchParams.get("email") ||
+            ""
           )
             .trim()
             .toLowerCase();
@@ -301,7 +288,7 @@ export default {
         }
 
         const subscription =
-          await getActiveSubscription(
+          await getActiveSubscriptionByEmail(
             email,
             env
           );
@@ -318,19 +305,18 @@ export default {
           success: true,
           subscribed: true,
           active: true,
-          plan: subscription.plan,
-          plan_name: subscription.plan_name,
-          email: subscription.email,
-          starts_at: subscription.starts_at,
-          expires_at: subscription.expires_at
+          user_id:
+            subscription.user_id,
+          email,
+          plan:
+            subscription.plan,
+          starts_at:
+            subscription.starts_at,
+          expires_at:
+            subscription.expires_at
         });
 
       } catch (error) {
-        console.error(
-          "Subscription check error:",
-          error
-        );
-
         return json({
           success: false,
           error:
@@ -341,7 +327,7 @@ export default {
     }
 
     // =========================================================
-    // RAW MARKET DATA
+    // MARKET DATA
     // =========================================================
     if (url.pathname === "/api/signals") {
       try {
@@ -352,18 +338,16 @@ export default {
           success: true,
           source: "Biquote",
           engine: "CyberFX",
-          markets: Object.keys(INSTRUMENTS),
+          markets:
+            Object.keys(INSTRUMENTS),
           timeframes:
-            TIMEFRAMES.map(tf => tf.name),
+            TIMEFRAMES.map(
+              tf => tf.name
+            ),
           data
         });
 
       } catch (error) {
-        console.error(
-          "Market data error:",
-          error
-        );
-
         return json({
           success: false,
           engine: "CyberFX",
@@ -399,11 +383,6 @@ export default {
         });
 
       } catch (error) {
-        console.error(
-          "Signal engine error:",
-          error
-        );
-
         return json({
           success: false,
           engine: "CyberFX",
@@ -455,7 +434,7 @@ export default {
   },
 
   // =========================================================
-  // AUTOMATIC 15-MINUTE SCAN
+  // AUTOMATIC 15-MINUTE SCANNER
   // =========================================================
   async scheduled(event, env, ctx) {
     ctx.waitUntil(
@@ -497,7 +476,7 @@ const PLANS = {
 
 
 // ============================================================
-// BIQUOTE MARKETS
+// MARKETS
 // ============================================================
 
 const INSTRUMENTS = {
@@ -514,20 +493,20 @@ const INSTRUMENTS = {
 
 const TIMEFRAMES = [
   {
-    name: "4h",
-    interval: "4h"
-  },
-  {
-    name: "1h",
-    interval: "1h"
+    name: "15min",
+    interval: "15m"
   },
   {
     name: "30min",
     interval: "30m"
   },
   {
-    name: "15min",
-    interval: "15m"
+    name: "1h",
+    interval: "1h"
+  },
+  {
+    name: "4h",
+    interval: "4h"
   }
 ];
 
@@ -545,14 +524,14 @@ const ENTRY_TIMEFRAMES = [
 
 
 // ============================================================
-// CONFIRMED SCORE
+// CONFIRMATION
 // ============================================================
 
-const CONFIRMED_SCORE = 10;
+const CONFIRMED_SCORE = 13;
 
 
 // ============================================================
-// PAYSTACK VERIFICATION
+// PAYSTACK VERIFY
 // ============================================================
 
 async function verifyPaystackPayment(
@@ -575,9 +554,8 @@ async function verifyPaystackPayment(
     await fetch(
       `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
       {
-        method: "GET",
         headers: {
-          "Authorization":
+          Authorization:
             `Bearer ${env.PAYSTACK_SECRET_KEY}`
         }
       }
@@ -603,17 +581,18 @@ async function verifyPaystackPayment(
   const transaction =
     result.data;
 
-  const paymentStatus =
-    transaction.status;
-
-  if (paymentStatus !== "success") {
+  if (
+    transaction.status !==
+    "success"
+  ) {
     await env.DB.prepare(`
       UPDATE payments
       SET status = ?
       WHERE reference = ?
     `)
       .bind(
-        paymentStatus || "failed",
+        transaction.status ||
+          "failed",
         reference
       )
       .run();
@@ -621,14 +600,16 @@ async function verifyPaystackPayment(
     return {
       success: false,
       payment_status:
-        paymentStatus || "failed",
+        transaction.status ||
+        "failed",
       reference
     };
   }
 
   const email =
     String(
-      transaction.customer?.email || ""
+      transaction.customer?.email ||
+      ""
     )
       .trim()
       .toLowerCase();
@@ -638,14 +619,17 @@ async function verifyPaystackPayment(
       success: false,
       payment_status: "failed",
       error:
-        "No customer email returned by Paystack"
+        "Paystack did not return customer email"
     };
   }
 
   let plan =
     transaction.metadata?.cyberfx_plan;
 
-  if (!plan || !PLANS[plan]) {
+  if (
+    !plan ||
+    !PLANS[plan]
+  ) {
     const existing =
       await env.DB.prepare(`
         SELECT plan
@@ -660,12 +644,15 @@ async function verifyPaystackPayment(
       existing?.plan;
   }
 
-  if (!plan || !PLANS[plan]) {
+  if (
+    !plan ||
+    !PLANS[plan]
+  ) {
     return {
       success: false,
       payment_status: "failed",
       error:
-        "Unable to determine CyberFX subscription plan"
+        "Unable to determine subscription plan"
     };
   }
 
@@ -689,15 +676,14 @@ async function verifyPaystackPayment(
 
     return {
       success: false,
-      payment_status: "amount_mismatch",
-      error:
-        "Payment amount does not match the selected plan"
+      payment_status:
+        "amount_mismatch"
     };
   }
 
-  const existingPayment =
+  const payment =
     await env.DB.prepare(`
-      SELECT status
+      SELECT *
       FROM payments
       WHERE reference = ?
       LIMIT 1
@@ -705,53 +691,68 @@ async function verifyPaystackPayment(
       .bind(reference)
       .first();
 
-  if (existingPayment?.status === "success") {
-    const existingSubscription =
-      await getActiveSubscription(
-        email,
-        env
-      );
-
+  if (
+    payment?.status ===
+    "success"
+  ) {
     return {
       success: true,
       payment_status: "success",
       reference,
       email,
-      plan,
-      plan_name: selectedPlan.name,
-      starts_at:
-        existingSubscription?.starts_at ||
-        null,
-      expires_at:
-        existingSubscription?.expires_at ||
-        null
+      plan
+    };
+  }
+
+  const user =
+    await env.DB.prepare(`
+      SELECT id, email
+      FROM users
+      WHERE LOWER(email) = ?
+      LIMIT 1
+    `)
+      .bind(email)
+      .first();
+
+  if (!user) {
+    return {
+      success: false,
+      payment_status: "success",
+      reference,
+      error:
+        "Payment succeeded, but no CyberFX website account exists for this email"
     };
   }
 
   const now =
     new Date();
 
-  const activeSubscription =
-    await getActiveSubscription(
-      email,
-      env
-    );
+  const existingSubscription =
+    await env.DB.prepare(`
+      SELECT *
+      FROM subscriptions
+      WHERE user_id = ?
+      AND status = 'active'
+      AND expires_at > ?
+      ORDER BY expires_at DESC
+      LIMIT 1
+    `)
+      .bind(
+        user.id,
+        now.toISOString()
+      )
+      .first();
 
   let startDate =
     now;
 
   if (
-    activeSubscription?.expires_at
+    existingSubscription?.expires_at
   ) {
-    const currentExpiry =
+    startDate =
       new Date(
-        activeSubscription.expires_at
+        existingSubscription.expires_at
       );
-
-    if (currentExpiry > now) {
-      startDate =
-        currentExpiry;
-    }
   }
 
   const expires =
@@ -764,63 +765,65 @@ async function verifyPaystackPayment(
     UPDATE payments
     SET
       status = ?,
-      paid_at = ?,
-      paystack_transaction_id = ?
+      paid_at = ?
     WHERE reference = ?
   `)
     .bind(
       "success",
       now.toISOString(),
-      String(
-        transaction.id || ""
-      ),
       reference
     )
     .run();
 
-  await env.DB.prepare(`
-    INSERT INTO subscriptions (
-      email,
-      plan,
-      plan_name,
-      starts_at,
-      expires_at,
-      status,
-      payment_reference,
-      created_at,
-      updated_at
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(email)
-    DO UPDATE SET
-      plan = excluded.plan,
-      plan_name = excluded.plan_name,
-      starts_at = excluded.starts_at,
-      expires_at = excluded.expires_at,
-      status = excluded.status,
-      payment_reference = excluded.payment_reference,
-      updated_at = excluded.updated_at
-  `)
-    .bind(
-      email,
-      plan,
-      selectedPlan.name,
-      startDate.toISOString(),
-      expires.toISOString(),
-      "active",
-      reference,
-      now.toISOString(),
-      now.toISOString()
-    )
-    .run();
+  if (existingSubscription) {
+    await env.DB.prepare(`
+      UPDATE subscriptions
+      SET
+        plan = ?,
+        paystack_reference = ?,
+        status = 'active',
+        starts_at = ?,
+        expires_at = ?
+      WHERE id = ?
+    `)
+      .bind(
+        plan,
+        reference,
+        startDate.toISOString(),
+        expires.toISOString(),
+        existingSubscription.id
+      )
+      .run();
+
+  } else {
+    await env.DB.prepare(`
+      INSERT INTO subscriptions (
+        user_id,
+        plan,
+        paystack_reference,
+        status,
+        starts_at,
+        expires_at
+      )
+      VALUES (?, ?, ?, 'active', ?, ?)
+    `)
+      .bind(
+        user.id,
+        plan,
+        reference,
+        startDate.toISOString(),
+        expires.toISOString()
+      )
+      .run();
+  }
 
   return {
     success: true,
     payment_status: "success",
     reference,
     email,
+    user_id: user.id,
     plan,
-    plan_name: selectedPlan.name,
     starts_at:
       startDate.toISOString(),
     expires_at:
@@ -830,10 +833,10 @@ async function verifyPaystackPayment(
 
 
 // ============================================================
-// ACTIVE SUBSCRIPTION
+// ACTIVE SUBSCRIPTION BY EMAIL
 // ============================================================
 
-async function getActiveSubscription(
+async function getActiveSubscriptionByEmail(
   email,
   env
 ) {
@@ -841,55 +844,69 @@ async function getActiveSubscription(
     return null;
   }
 
-  const subscription =
-    await env.DB.prepare(`
-      SELECT
-        email,
-        plan,
-        plan_name,
-        starts_at,
-        expires_at,
-        status
-      FROM subscriptions
-      WHERE email = ?
-      LIMIT 1
-    `)
-      .bind(email)
-      .first();
+  return env.DB.prepare(`
+    SELECT
+      s.id,
+      s.user_id,
+      s.plan,
+      s.status,
+      s.starts_at,
+      s.expires_at
+    FROM subscriptions s
+    INNER JOIN users u
+      ON u.id = s.user_id
+    WHERE LOWER(u.email) = ?
+      AND s.status = 'active'
+      AND s.expires_at > ?
+    ORDER BY s.expires_at DESC
+    LIMIT 1
+  `)
+    .bind(
+      email,
+      new Date().toISOString()
+    )
+    .first();
+}
 
-  if (!subscription) {
+
+// ============================================================
+// ACTIVE SUBSCRIPTION BY TELEGRAM ID
+// ============================================================
+
+async function getActiveSubscriberByTelegramId(
+  telegramId,
+  env
+) {
+  if (!env.DB) {
     return null;
   }
 
-  const expiry =
-    new Date(
-      subscription.expires_at
-    );
-
-  if (
-    subscription.status !== "active" ||
-    !Number.isFinite(
-      expiry.getTime()
-    ) ||
-    expiry <= new Date()
-  ) {
-    await env.DB.prepare(`
-      UPDATE subscriptions
-      SET status = ?,
-          updated_at = ?
-      WHERE email = ?
-    `)
-      .bind(
-        "expired",
-        new Date().toISOString(),
-        email
-      )
-      .run();
-
-    return null;
-  }
-
-  return subscription;
+  return env.DB.prepare(`
+    SELECT
+      u.id AS user_id,
+      u.email,
+      s.plan,
+      s.status,
+      s.starts_at,
+      s.expires_at,
+      tl.telegram_id,
+      tl.telegram_username
+    FROM telegram_links tl
+    INNER JOIN users u
+      ON u.id = tl.user_id
+    INNER JOIN subscriptions s
+      ON s.user_id = u.id
+    WHERE tl.telegram_id = ?
+      AND s.status = 'active'
+      AND s.expires_at > ?
+    ORDER BY s.expires_at DESC
+    LIMIT 1
+  `)
+    .bind(
+      String(telegramId),
+      new Date().toISOString()
+    )
+    .first();
 }
 
 
@@ -910,7 +927,8 @@ function addMonths(
   result.setUTCDate(1);
 
   result.setUTCMonth(
-    result.getUTCMonth() + months
+    result.getUTCMonth() +
+      months
   );
 
   const lastDay =
@@ -934,7 +952,7 @@ function addMonths(
 
 
 // ============================================================
-// LOAD ALL BIQUOTE MARKETS
+// LOAD ALL MARKETS
 // ============================================================
 
 async function loadAllMarkets() {
@@ -942,7 +960,9 @@ async function loadAllMarkets() {
 
   for (
     const [name, symbol]
-    of Object.entries(INSTRUMENTS)
+    of Object.entries(
+      INSTRUMENTS
+    )
   ) {
     data[name] = {};
 
@@ -981,14 +1001,14 @@ async function getCandles(
 
   apiUrl.searchParams.set(
     "limit",
-    "200"
+    "150"
   );
 
   try {
     const response =
       await fetch(apiUrl, {
         headers: {
-          "Accept":
+          Accept:
             "application/json"
         }
       });
@@ -997,18 +1017,27 @@ async function getCandles(
       await response.json();
 
     if (
-      !response.ok ||
-      !Array.isArray(result.bars)
+      !response.ok
     ) {
       return {
         status: "error",
-        code: response.status,
+        code:
+          response.status,
         message:
           result?.message ||
           result?.error ||
-          "Biquote request failed"
+          "Biquote request failed",
+        symbol,
+        interval
       };
     }
+
+    const bars =
+      Array.isArray(
+        result.bars
+      )
+        ? result.bars
+        : [];
 
     return {
       status: "success",
@@ -1016,14 +1045,17 @@ async function getCandles(
       symbol:
         result.symbol ||
         symbol,
-      interval,
-      candles:
-        result.bars
+      interval:
+        result.interval ||
+        interval,
+      candles: bars
     };
 
   } catch (error) {
     return {
       status: "error",
+      symbol,
+      interval,
       message:
         error?.message ||
         String(error)
@@ -1044,7 +1076,9 @@ async function generateSignals() {
 
   for (
     const instrument
-    of Object.keys(INSTRUMENTS)
+    of Object.keys(
+      INSTRUMENTS
+    )
   ) {
     const market =
       marketData[instrument];
@@ -1095,16 +1129,24 @@ async function generateSignals() {
     candidates.sort(
       (a, b) => {
         const quality =
-          SIGNAL_PRIORITY[b.status] -
-          SIGNAL_PRIORITY[a.status];
+          SIGNAL_PRIORITY[
+            b.status
+          ] -
+          SIGNAL_PRIORITY[
+            a.status
+          ];
 
         if (quality !== 0) {
           return quality;
         }
 
         return (
-          (tfPriority[b.entryTFRaw] || 0) -
-          (tfPriority[a.entryTFRaw] || 0)
+          (tfPriority[
+            b.entryTFRaw
+          ] || 0) -
+          (tfPriority[
+            a.entryTFRaw
+          ] || 0)
         );
       }
     );
@@ -1132,9 +1174,11 @@ function analyzeInstrument(
 
   if (
     !entryData ||
-    entryData.status !== "success" ||
+    entryData.status !==
+      "success" ||
     !entryData.candles ||
-    entryData.candles.length < 30
+    entryData.candles.length <
+      30
   ) {
     return null;
   }
@@ -1149,22 +1193,26 @@ function analyzeInstrument(
       c => !c.isOpen
     );
 
-  if (closed.length < 30) {
+  if (
+    closed.length < 30
+  ) {
     return null;
   }
 
   const current =
-    closed[closed.length - 1];
+    closed[
+      closed.length - 1
+    ];
 
   const htfBias =
-    determineHTFBias(market);
+    determineHTFBias(
+      market
+    );
 
   const structure =
-    detectStructure(closed);
-
-  // ==========================================================
-  // REJECTION
-  // ==========================================================
+    detectStructure(
+      closed
+    );
 
   const rejection =
     detectRejection(
@@ -1178,7 +1226,8 @@ function analyzeInstrument(
     rejection &&
     (
       htfBias === "neutral" ||
-      rejection.direction === htfBias
+      rejection.direction ===
+        htfBias
     )
   ) {
     bestResult =
@@ -1191,10 +1240,6 @@ function analyzeInstrument(
       );
   }
 
-  // ==========================================================
-  // CRT
-  // ==========================================================
-
   const accumulation =
     detectAccumulation(
       closed
@@ -1206,20 +1251,12 @@ function analyzeInstrument(
       accumulation
     );
 
-  // ==========================================================
-  // OPTIONAL LIQUIDITY SWEEP
-  // ==========================================================
-
   const sweep =
     detectLiquiditySweep(
       closed,
       crt,
       structure
     );
-
-  // ==========================================================
-  // DIRECTION
-  // ==========================================================
 
   const direction =
     determineDevelopingDirection(
@@ -1233,20 +1270,18 @@ function analyzeInstrument(
     return bestResult;
   }
 
-  // ==========================================================
-  // STRUCTURE BREAK
-  // ==========================================================
+  const displacement =
+    detectDisplacement(
+      closed,
+      sweep
+    );
 
   const structureBreak =
     detectBOSMSS(
       closed,
       structure,
-      direction
+      displacement
     );
-
-  // ==========================================================
-  // VALID SETUP
-  // ==========================================================
 
   const validSetup =
     detectValidSetup(
@@ -1255,6 +1290,7 @@ function analyzeInstrument(
       rejection,
       crt,
       sweep,
+      displacement,
       structureBreak,
       structure
     );
@@ -1269,6 +1305,7 @@ function analyzeInstrument(
         sweep,
         structure,
         crt,
+        displacement,
         structureBreak,
         rejection,
         htfBias
@@ -1278,8 +1315,12 @@ function analyzeInstrument(
       setupSignal &&
       (
         !bestResult ||
-        SIGNAL_PRIORITY[setupSignal.status] >
-          SIGNAL_PRIORITY[bestResult.status]
+        SIGNAL_PRIORITY[
+          setupSignal.status
+        ] >
+          SIGNAL_PRIORITY[
+            bestResult.status
+          ]
       )
     ) {
       bestResult =
@@ -1287,11 +1328,10 @@ function analyzeInstrument(
     }
   }
 
-  // ==========================================================
-  // CONFIRMED
-  // ==========================================================
-
   if (
+    !crt ||
+    !sweep ||
+    !displacement ||
     !structureBreak
   ) {
     return bestResult;
@@ -1318,37 +1358,30 @@ function analyzeInstrument(
   const fib =
     calculateFib(
       impulse,
-      direction
+      structureBreak.direction
     );
 
   const orderBlock =
     findOrderBlock(
       closed,
-      direction,
+      displacement,
       structureBreak
     );
-
-  // ==========================================================
-  // FIB + OB
-  // ==========================================================
-
-  if (!fib || !orderBlock) {
-    return bestResult;
-  }
 
   const fvg =
     findFVG(
       closed,
-      direction
+      displacement
     );
 
   const pullback =
     validatePullback(
       closed,
+      impulse,
       fib,
       orderBlock,
       fvg,
-      direction
+      structureBreak.direction
     );
 
   if (!pullback.valid) {
@@ -1361,7 +1394,7 @@ function analyzeInstrument(
       fib,
       orderBlock,
       fvg,
-      direction
+      structureBreak.direction
     );
 
   if (!entry) {
@@ -1371,7 +1404,7 @@ function analyzeInstrument(
   const stopLoss =
     determineStopLoss(
       entry,
-      direction,
+      structureBreak.direction,
       sweep,
       orderBlock,
       closed
@@ -1382,7 +1415,8 @@ function analyzeInstrument(
   }
 
   const risk =
-    direction === "bullish"
+    structureBreak.direction ===
+      "bullish"
       ? entry - stopLoss
       : stopLoss - entry;
 
@@ -1391,9 +1425,20 @@ function analyzeInstrument(
   }
 
   const takeProfit =
-    direction === "bullish"
+    structureBreak.direction ===
+      "bullish"
       ? entry + risk * 3
       : entry - risk * 3;
+
+  if (
+    blockedByOpposingLiquidity(
+      closed,
+      structureBreak.direction,
+      takeProfit
+    )
+  ) {
+    return bestResult;
+  }
 
   const score =
     calculateScore({
@@ -1401,43 +1446,24 @@ function analyzeInstrument(
       crt,
       sweep,
       structureBreak,
+      displacement,
       orderBlock,
       fvg,
       fib,
+      accumulation,
       pullback
     });
-
-  const mandatoryPassed =
-    !!structureBreak &&
-    !!orderBlock &&
-    !!pullback.valid &&
-    risk > 0;
-
-  if (!mandatoryPassed) {
-    return bestResult;
-  }
 
   if (score < CONFIRMED_SCORE) {
     return bestResult;
   }
 
-  const reason =
-    buildTradeReason({
-      instrument,
-      direction,
-      currentPrice: current.close,
-      entry,
-      fib,
-      orderBlock,
-      sweep,
-      structureBreak
-    });
-
   return {
     instrument,
 
     direction:
-      direction === "bullish"
+      structureBreak.direction ===
+      "bullish"
         ? "BUY"
         : "SELL",
 
@@ -1456,23 +1482,26 @@ function analyzeInstrument(
     takeProfit:
       roundPrice(takeProfit),
 
-    riskReward: "1:3",
+    riskReward:
+      "1:3",
 
-    status: "CONFIRMED",
+    status:
+      "CONFIRMED",
 
     label:
-      direction === "bullish"
-        ? "🔥 CYBERFX CONFIRMED BUY"
-        : "🔥 CYBERFX CONFIRMED SELL",
-
-    reason,
+      structureBreak.direction ===
+      "bullish"
+        ? "🔥 CONFIRMED BUY"
+        : "🔥 CONFIRMED SELL",
 
     internal: {
       score,
       htfBias,
+      accumulation,
       crt,
       sweep,
       structureBreak,
+      displacement,
       orderBlock,
       fvg,
       fib,
@@ -1483,7 +1512,7 @@ function analyzeInstrument(
 
 
 // ============================================================
-// REJECTION DETECTOR
+// REJECTION
 // ============================================================
 
 function detectRejection(
@@ -1491,7 +1520,9 @@ function detectRejection(
   structure
 ) {
   const current =
-    candles[candles.length - 1];
+    candles[
+      candles.length - 1
+    ];
 
   if (!current) {
     return null;
@@ -1501,7 +1532,7 @@ function detectRejection(
     current.high -
     current.low;
 
-  if (!range || range <= 0) {
+  if (range <= 0) {
     return null;
   }
 
@@ -1533,16 +1564,14 @@ function detectRejection(
   const atr =
     ATR(candles);
 
-  const meaningfulRange =
-    atr
-      ? range >= atr * 0.35
-      : true;
-
-  if (!meaningfulRange) {
+  if (
+    atr &&
+    range <
+      atr * 0.35
+  ) {
     return null;
   }
 
-  // BUY REJECTION
   if (
     lowerWick >=
       Math.max(
@@ -1558,28 +1587,31 @@ function detectRejection(
       structure?.lows?.some(
         swing =>
           Math.abs(
-            swing.price - level
-          ) <= range * 0.50
+            swing.price -
+            level
+          ) <=
+          range * 0.50
       );
 
     if (
       nearSwingLow ||
-      lowerWick >= range * 0.40
+      lowerWick >=
+        range * 0.40
     ) {
       return {
         direction: "bullish",
-        type: "BUY REJECTION",
+        type:
+          "BUY REJECTION",
         level,
         candle: current,
         reason:
           nearSwingLow
-            ? "Price rejected a recent swing low."
-            : "Price showed strong lower-wick rejection."
+            ? "Swing low rejection"
+            : "Strong lower-wick rejection"
       };
     }
   }
 
-  // SELL REJECTION
   if (
     upperWick >=
       Math.max(
@@ -1595,23 +1627,27 @@ function detectRejection(
       structure?.highs?.some(
         swing =>
           Math.abs(
-            swing.price - level
-          ) <= range * 0.50
+            swing.price -
+            level
+          ) <=
+          range * 0.50
       );
 
     if (
       nearSwingHigh ||
-      upperWick >= range * 0.40
+      upperWick >=
+        range * 0.40
     ) {
       return {
         direction: "bearish",
-        type: "SELL REJECTION",
+        type:
+          "SELL REJECTION",
         level,
         candle: current,
         reason:
           nearSwingHigh
-            ? "Price rejected a recent swing high."
-            : "Price showed strong upper-wick rejection."
+            ? "Swing high rejection"
+            : "Strong upper-wick rejection"
       };
     }
   }
@@ -1621,7 +1657,7 @@ function detectRejection(
 
 
 // ============================================================
-// DEVELOPING DIRECTION
+// DIRECTION
 // ============================================================
 
 function determineDevelopingDirection(
@@ -1633,7 +1669,8 @@ function determineDevelopingDirection(
   if (sweep?.direction) {
     if (
       htfBias === "neutral" ||
-      sweep.direction === htfBias
+      sweep.direction ===
+        htfBias
     ) {
       return sweep.direction;
     }
@@ -1642,7 +1679,8 @@ function determineDevelopingDirection(
   if (rejection?.direction) {
     if (
       htfBias === "neutral" ||
-      rejection.direction === htfBias
+      rejection.direction ===
+        htfBias
     ) {
       return rejection.direction;
     }
@@ -1650,11 +1688,13 @@ function determineDevelopingDirection(
 
   if (
     structure?.direction &&
-    structure.direction !== "neutral"
+    structure.direction !==
+      "neutral"
   ) {
     if (
       htfBias === "neutral" ||
-      structure.direction === htfBias
+      structure.direction ===
+        htfBias
     ) {
       return structure.direction;
     }
@@ -1674,18 +1714,22 @@ function detectValidSetup(
   rejection,
   crt,
   sweep,
+  displacement,
   structureBreak,
   structure
 ) {
   let score = 0;
 
-  if (htfBias === direction) {
+  if (
+    htfBias === direction
+  ) {
     score += 2;
   }
 
   if (
     rejection &&
-    rejection.direction === direction
+    rejection.direction ===
+      direction
   ) {
     score += 2;
   }
@@ -1694,29 +1738,39 @@ function detectValidSetup(
     score += 1;
   }
 
-  // Sweep is optional.
   if (
     sweep &&
-    sweep.direction === direction
+    sweep.direction ===
+      direction
+  ) {
+    score += 3;
+  }
+
+  if (
+    displacement &&
+    displacement.direction ===
+      direction
   ) {
     score += 2;
   }
 
   if (
     structureBreak &&
-    structureBreak.direction === direction
+    structureBreak.direction ===
+      direction
   ) {
     score += 3;
   }
 
   if (
     structure &&
-    structure.direction === direction
+    structure.direction ===
+      direction
   ) {
     score += 1;
   }
 
-  return score >= 4;
+  return score >= 5;
 }
 
 
@@ -1732,13 +1786,13 @@ function buildRejectionSignal(
   current
 ) {
   const direction =
-    rejection.direction === "bullish"
+    rejection.direction ===
+      "bullish"
       ? "BUY"
       : "SELL";
 
   return {
     instrument,
-
     direction,
 
     entryTF:
@@ -1747,7 +1801,8 @@ function buildRejectionSignal(
     entryTFRaw:
       entryTF,
 
-    status: "REJECTION",
+    status:
+      "REJECTION",
 
     label:
       direction === "BUY"
@@ -1764,13 +1819,13 @@ function buildRejectionSignal(
         current.close
       ),
 
-    reason:
+    rejectionReason:
       rejection.reason,
 
     message:
       direction === "BUY"
-        ? "Price is rejecting the level. Watch for a retracement before considering an entry."
-        : "Price is rejecting the level. Watch for a retracement before considering an entry.",
+        ? "Price rejected the level and closed back above it."
+        : "Price rejected the level and closed back below it.",
 
     internal: {
       htfBias,
@@ -1781,7 +1836,7 @@ function buildRejectionSignal(
 
 
 // ============================================================
-// VALID SETUP BUILDER
+// VALID SETUP SIGNAL
 // ============================================================
 
 function buildValidSetupSignal(
@@ -1792,12 +1847,15 @@ function buildValidSetupSignal(
   sweep,
   structure,
   crt,
+  displacement,
   structureBreak,
   rejection,
   htfBias
 ) {
   const current =
-    candles[candles.length - 1];
+    candles[
+      candles.length - 1
+    ];
 
   const atr =
     ATR(candles);
@@ -1809,31 +1867,26 @@ function buildValidSetupSignal(
   let entry =
     current.close;
 
-  if (rejection?.level) {
-    entry =
-      rejection.level;
-  }
-
   if (sweep?.level) {
     entry =
       sweep.level;
   }
 
-  let stopLoss;
-
-  if (direction === "bullish") {
-    stopLoss =
-      (sweep?.level ||
-        rejection?.level ||
-        current.low) -
-      atr * 0.25;
-  } else {
-    stopLoss =
-      (sweep?.level ||
-        rejection?.level ||
-        current.high) +
-      atr * 0.25;
+  if (rejection?.level) {
+    entry =
+      rejection.level;
   }
+
+  const stopLoss =
+    direction === "bullish"
+      ? entry -
+        (
+          atr * 0.25
+        )
+      : entry +
+        (
+          atr * 0.25
+        );
 
   const risk =
     direction === "bullish"
@@ -1849,17 +1902,54 @@ function buildValidSetupSignal(
       ? entry + risk * 3
       : entry - risk * 3;
 
-  const reason =
-    buildDevelopingReason({
-      instrument,
-      direction,
-      currentPrice: current.close,
-      entry,
-      rejection,
-      sweep,
-      structureBreak,
-      structure
-    });
+  const components = [];
+
+  if (
+    htfBias === direction
+  ) {
+    components.push(
+      "HTF Bias"
+    );
+  }
+
+  if (
+    structure?.direction ===
+      direction
+  ) {
+    components.push(
+      "Structure"
+    );
+  }
+
+  if (rejection) {
+    components.push(
+      "Rejection"
+    );
+  }
+
+  if (sweep) {
+    components.push(
+      "Liquidity Sweep"
+    );
+  }
+
+  if (displacement) {
+    components.push(
+      "Displacement"
+    );
+  }
+
+  if (structureBreak) {
+    components.push(
+      structureBreak.type
+    );
+  }
+
+  if (crt) {
+    components.push(
+      "CRT"
+    );
+  }
 
   return {
     instrument,
@@ -1884,30 +1974,24 @@ function buildValidSetupSignal(
     takeProfit:
       roundPrice(takeProfit),
 
-    riskReward: "1:3",
+    riskReward:
+      "1:3",
 
-    status: "VALID SETUP",
+    status:
+      "VALID SETUP",
 
     label:
       direction === "bullish"
-        ? "🟡 CYBERFX VALID BUY"
-        : "🟡 CYBERFX VALID SELL",
+        ? "🟡 VALID BUY SETUP"
+        : "🟡 VALID SELL SETUP",
 
-    reason,
-
-    internal: {
-      htfBias,
-      crt,
-      sweep,
-      structureBreak,
-      rejection
-    }
+    components
   };
 }
 
 
 // ============================================================
-// CANDLE NORMALIZATION
+// NORMALIZE CANDLES
 // ============================================================
 
 function normalizeCandles(
@@ -1917,7 +2001,7 @@ function normalizeCandles(
     .map(c => ({
       time:
         c.openTime ||
-        c.datetime ||
+        c.timestamp ||
         c.time,
 
       open:
@@ -1932,14 +2016,29 @@ function normalizeCandles(
       close:
         Number(c.close),
 
+      volume:
+        Number(
+          c.volume ||
+          c.tickVolume ||
+          0
+        ),
+
       isOpen:
-        !!c.isOpen
+        c.isOpen === true
     }))
     .filter(c =>
-      Number.isFinite(c.open) &&
-      Number.isFinite(c.high) &&
-      Number.isFinite(c.low) &&
-      Number.isFinite(c.close)
+      Number.isFinite(
+        c.open
+      ) &&
+      Number.isFinite(
+        c.high
+      ) &&
+      Number.isFinite(
+        c.low
+      ) &&
+      Number.isFinite(
+        c.close
+      )
     )
     .sort(
       (a, b) =>
@@ -1968,8 +2067,10 @@ function ATR(
 
   for (
     let i =
-      candles.length - period;
-    i < candles.length;
+      candles.length -
+      period;
+    i <
+      candles.length;
     i++
   ) {
     const current =
@@ -2002,7 +2103,7 @@ function ATR(
 
 
 // ============================================================
-// MARKET STRUCTURE
+// STRUCTURE
 // ============================================================
 
 function detectStructure(
@@ -2013,7 +2114,8 @@ function detectStructure(
 
   for (
     let i = 2;
-    i < candles.length - 2;
+    i <
+      candles.length - 2;
     i++
   ) {
     if (
@@ -2056,30 +2158,40 @@ function detectStructure(
     lows.length < 2
   ) {
     return {
-      direction: "neutral",
+      direction:
+        "neutral",
       highs,
       lows
     };
   }
 
   const h1 =
-    highs[highs.length - 2];
+    highs[
+      highs.length - 2
+    ];
 
   const h2 =
-    highs[highs.length - 1];
+    highs[
+      highs.length - 1
+    ];
 
   const l1 =
-    lows[lows.length - 2];
+    lows[
+      lows.length - 2
+    ];
 
   const l2 =
-    lows[lows.length - 1];
+    lows[
+      lows.length - 1
+    ];
 
   if (
     h2.price > h1.price &&
     l2.price > l1.price
   ) {
     return {
-      direction: "bullish",
+      direction:
+        "bullish",
       highs,
       lows
     };
@@ -2090,14 +2202,16 @@ function detectStructure(
     l2.price < l1.price
   ) {
     return {
-      direction: "bearish",
+      direction:
+        "bearish",
       highs,
       lows
     };
   }
 
   return {
-    direction: "neutral",
+    direction:
+      "neutral",
     highs,
     lows
   };
@@ -2105,8 +2219,7 @@ function detectStructure(
 
 
 // ============================================================
-// HIGHER-TIMEFRAME BIAS
-// 4H + 1H ONLY
+// HTF BIAS
 // ============================================================
 
 function determineHTFBias(
@@ -2114,7 +2227,8 @@ function determineHTFBias(
 ) {
   const frames = [
     "4h",
-    "1h"
+    "1h",
+    "30min"
   ];
 
   let bullish = 0;
@@ -2128,7 +2242,8 @@ function determineHTFBias(
 
     if (
       !data ||
-      data.status !== "success"
+      data.status !==
+        "success"
     ) {
       continue;
     }
@@ -2140,7 +2255,9 @@ function determineHTFBias(
         c => !c.isOpen
       );
 
-    if (candles.length < 30) {
+    if (
+      candles.length < 30
+    ) {
       continue;
     }
 
@@ -2151,14 +2268,14 @@ function determineHTFBias(
 
     if (
       structure.direction ===
-      "bullish"
+        "bullish"
     ) {
       bullish++;
     }
 
     if (
       structure.direction ===
-      "bearish"
+        "bearish"
     ) {
       bearish++;
     }
@@ -2193,7 +2310,9 @@ function detectAccumulation(
   }
 
   const recent =
-    candles.slice(-lookback);
+    candles.slice(
+      -lookback
+    );
 
   const high =
     Math.max(
@@ -2217,40 +2336,8 @@ function detectAccumulation(
 
   if (
     !atr ||
-    range > atr * 2
-  ) {
-    return null;
-  }
-
-  let upperTouches = 0;
-  let lowerTouches = 0;
-
-  const tolerance =
-    range * 0.15;
-
-  for (
-    const candle of recent
-  ) {
-    if (
-      Math.abs(
-        candle.high - high
-      ) <= tolerance
-    ) {
-      upperTouches++;
-    }
-
-    if (
-      Math.abs(
-        candle.low - low
-      ) <= tolerance
-    ) {
-      lowerTouches++;
-    }
-  }
-
-  if (
-    upperTouches < 2 &&
-    lowerTouches < 2
+    range >
+      atr * 2
   ) {
     return null;
   }
@@ -2259,7 +2346,8 @@ function detectAccumulation(
     high,
     low,
     range,
-    candles: lookback
+    candles:
+      lookback
   };
 }
 
@@ -2292,7 +2380,8 @@ function detectCRT(
     !range ||
     (
       atr &&
-      range < atr * 0.15
+      range <
+        atr * 0.15
     )
   ) {
     return null;
@@ -2312,7 +2401,7 @@ function detectCRT(
 
 
 // ============================================================
-// OPTIONAL LIQUIDITY SWEEP
+// LIQUIDITY SWEEP
 // ============================================================
 
 function detectLiquiditySweep(
@@ -2320,6 +2409,10 @@ function detectLiquiditySweep(
   crt,
   structure
 ) {
+  if (!crt) {
+    return null;
+  }
+
   const current =
     candles[
       candles.length - 1
@@ -2330,73 +2423,153 @@ function detectLiquiditySweep(
   }
 
   if (
-    crt &&
-    current.low < crt.low &&
-    current.close > crt.low
+    current.low <
+      crt.low &&
+    current.close >
+      crt.low
   ) {
     return {
-      direction: "bullish",
-      level: crt.low,
-      candle: current
+      direction:
+        "bullish",
+      level:
+        crt.low,
+      candle:
+        current
     };
   }
 
   if (
-    crt &&
-    current.high > crt.high &&
-    current.close < crt.high
+    current.high >
+      crt.high &&
+    current.close <
+      crt.high
   ) {
     return {
-      direction: "bearish",
-      level: crt.high,
-      candle: current
+      direction:
+        "bearish",
+      level:
+        crt.high,
+      candle:
+        current
+    };
+  }
+
+  return null;
+}
+
+
+// ============================================================
+// DISPLACEMENT
+// ============================================================
+
+function detectDisplacement(
+  candles,
+  sweep
+) {
+  if (!sweep) {
+    return null;
+  }
+
+  const current =
+    candles[
+      candles.length - 1
+    ];
+
+  const previous10 =
+    candles.slice(
+      -11,
+      -1
+    );
+
+  if (
+    previous10.length <
+    10
+  ) {
+    return null;
+  }
+
+  const averageBody =
+    average(
+      previous10.map(
+        c =>
+          Math.abs(
+            c.close -
+            c.open
+          )
+      )
+    );
+
+  const body =
+    Math.abs(
+      current.close -
+      current.open
+    );
+
+  const range =
+    current.high -
+    current.low;
+
+  if (!range) {
+    return null;
+  }
+
+  const bodyRatio =
+    body / range;
+
+  const closeLocation =
+    (
+      current.close -
+      current.low
+    ) / range;
+
+  const bullish =
+    current.close >
+    current.open;
+
+  const bearish =
+    current.close <
+    current.open;
+
+  if (
+    sweep.direction ===
+      "bullish" &&
+    bullish &&
+    closeLocation >=
+      0.75 &&
+    body >=
+      averageBody * 1.5 &&
+    bodyRatio >=
+      0.60
+  ) {
+    return {
+      direction:
+        "bullish",
+      candle:
+        current,
+      body,
+      range
     };
   }
 
   if (
-    structure?.lows?.length
+    sweep.direction ===
+      "bearish" &&
+    bearish &&
+    closeLocation <=
+      0.25 &&
+    body >=
+      averageBody * 1.5 &&
+    bodyRatio >=
+      0.60
   ) {
-    const swingLow =
-      structure.lows[
-        structure.lows.length - 1
-      ];
-
-    if (
-      current.low <
-        swingLow.price &&
-      current.close >
-        swingLow.price
-    ) {
-      return {
-        direction: "bullish",
-        level:
-          swingLow.price,
-        candle: current
-      };
-    }
-  }
-
-  if (
-    structure?.highs?.length
-  ) {
-    const swingHigh =
-      structure.highs[
-        structure.highs.length - 1
-      ];
-
-    if (
-      current.high >
-        swingHigh.price &&
-      current.close <
-        swingHigh.price
-    ) {
-      return {
-        direction: "bearish",
-        level:
-          swingHigh.price,
-        candle: current
-      };
-    }
+    return {
+      direction:
+        "bearish",
+      candle:
+        current,
+      body,
+      range
+    };
   }
 
   return null;
@@ -2410,9 +2583,12 @@ function detectLiquiditySweep(
 function detectBOSMSS(
   candles,
   structure,
-  direction
+  displacement
 ) {
-  if (!structure) {
+  if (
+    !structure ||
+    !displacement
+  ) {
     return null;
   }
 
@@ -2421,16 +2597,14 @@ function detectBOSMSS(
       candles.length - 1
     ];
 
-  if (!current) {
-    return null;
-  }
-
   if (
-    direction === "bullish"
+    displacement.direction ===
+      "bullish"
   ) {
     const previousHigh =
       structure.highs[
-        structure.highs.length - 1
+        structure.highs.length -
+        1
       ];
 
     if (
@@ -2439,14 +2613,13 @@ function detectBOSMSS(
         previousHigh.price
     ) {
       return {
-        direction: "bullish",
-
+        direction:
+          "bullish",
         type:
           structure.direction ===
           "bearish"
             ? "MSS"
             : "BOS",
-
         level:
           previousHigh.price
       };
@@ -2454,11 +2627,13 @@ function detectBOSMSS(
   }
 
   if (
-    direction === "bearish"
+    displacement.direction ===
+      "bearish"
   ) {
     const previousLow =
       structure.lows[
-        structure.lows.length - 1
+        structure.lows.length -
+        1
       ];
 
     if (
@@ -2467,14 +2642,13 @@ function detectBOSMSS(
         previousLow.price
     ) {
       return {
-        direction: "bearish",
-
+        direction:
+          "bearish",
         type:
           structure.direction ===
           "bullish"
             ? "MSS"
             : "BOS",
-
         level:
           previousLow.price
       };
@@ -2494,33 +2668,32 @@ function getImpulseLeg(
   structureBreak,
   sweep
 ) {
-  if (!structureBreak) {
+  if (
+    !structureBreak ||
+    !sweep
+  ) {
     return null;
   }
 
   if (
     structureBreak.direction ===
-    "bullish"
+      "bullish"
   ) {
-    const low =
-      sweep?.level ||
-      findRecentLow(candles);
-
     return {
-      direction: "bullish",
-      low,
+      direction:
+        "bullish",
+      low:
+        sweep.level,
       high:
         structureBreak.level
     };
   }
 
-  const high =
-    sweep?.level ||
-    findRecentHigh(candles);
-
   return {
-    direction: "bearish",
-    high,
+    direction:
+      "bearish",
+    high:
+      sweep.level,
     low:
       structureBreak.level
   };
@@ -2528,7 +2701,7 @@ function getImpulseLeg(
 
 
 // ============================================================
-// FIBONACCI RETRACEMENT
+// FIB
 // ============================================================
 
 function calculateFib(
@@ -2544,14 +2717,14 @@ function calculateFib(
     impulse.low;
 
   if (
-    !Number.isFinite(range) ||
     range <= 0
   ) {
     return null;
   }
 
   if (
-    direction === "bullish"
+    direction ===
+      "bullish"
   ) {
     return {
       "38.2":
@@ -2590,38 +2763,35 @@ function calculateFib(
 
 function findOrderBlock(
   candles,
-  direction,
+  displacement,
   structureBreak
 ) {
-  if (!structureBreak) {
+  if (
+    !displacement ||
+    !structureBreak
+  ) {
     return null;
   }
 
-  const breakIndex =
+  const index =
     candles.findIndex(
       c =>
-        (
-          direction === "bullish"
-            ? c.close >
-              structureBreak.level
-            : c.close <
-              structureBreak.level
-        )
+        c.time ===
+        displacement.candle.time
     );
 
-  const start =
-    breakIndex > 0
-      ? breakIndex - 1
-      : candles.length - 2;
+  if (index <= 0) {
+    return null;
+  }
 
   for (
     let i =
-      start;
+      index - 1;
 
     i >=
       Math.max(
         0,
-        start - 8
+        index - 5
       );
 
     i--
@@ -2630,12 +2800,14 @@ function findOrderBlock(
       candles[i];
 
     if (
-      direction === "bullish" &&
+      structureBreak.direction ===
+        "bullish" &&
       candle.close <
         candle.open
     ) {
       return {
-        direction: "bullish",
+        direction:
+          "bullish",
         high:
           candle.high,
         low:
@@ -2646,12 +2818,14 @@ function findOrderBlock(
     }
 
     if (
-      direction === "bearish" &&
+      structureBreak.direction ===
+        "bearish" &&
       candle.close >
         candle.open
     ) {
       return {
-        direction: "bearish",
+        direction:
+          "bearish",
         high:
           candle.high,
         low:
@@ -2672,16 +2846,22 @@ function findOrderBlock(
 
 function findFVG(
   candles,
-  direction
+  displacement
 ) {
-  if (
-    candles.length < 3
-  ) {
+  if (!displacement) {
     return null;
   }
 
   const i =
-    candles.length - 1;
+    candles.findIndex(
+      c =>
+        c.time ===
+        displacement.candle.time
+    );
+
+  if (i < 2) {
+    return null;
+  }
 
   const c1 =
     candles[i - 2];
@@ -2690,24 +2870,34 @@ function findFVG(
     candles[i];
 
   if (
-    direction === "bullish" &&
-    c1.high < c3.low
+    displacement.direction ===
+      "bullish" &&
+    c1.high <
+      c3.low
   ) {
     return {
-      direction: "bullish",
-      low: c1.high,
-      high: c3.low
+      direction:
+        "bullish",
+      low:
+        c1.high,
+      high:
+        c3.low
     };
   }
 
   if (
-    direction === "bearish" &&
-    c1.low > c3.high
+    displacement.direction ===
+      "bearish" &&
+    c1.low >
+      c3.high
   ) {
     return {
-      direction: "bearish",
-      low: c3.high,
-      high: c1.low
+      direction:
+        "bearish",
+      low:
+        c3.high,
+      high:
+        c1.low
     };
   }
 
@@ -2716,11 +2906,12 @@ function findFVG(
 
 
 // ============================================================
-// HEALTHY PULLBACK
+// PULLBACK
 // ============================================================
 
 function validatePullback(
   candles,
+  impulse,
   fib,
   orderBlock,
   fvg,
@@ -2728,10 +2919,11 @@ function validatePullback(
 ) {
   if (
     !fib ||
-    !orderBlock
+    !impulse
   ) {
     return {
-      valid: false
+      valid:
+        false
     };
   }
 
@@ -2743,55 +2935,48 @@ function validatePullback(
   const price =
     current.close;
 
-  let fibRetracement = false;
+  let fibZone =
+    false;
 
   if (
-    direction === "bullish"
+    direction ===
+      "bullish"
   ) {
-    fibRetracement =
-      price <= fib["38.2"] &&
-      price >= fib["61.8"];
+    fibZone =
+      price <=
+        fib["38.2"] &&
+      price >=
+        fib["61.8"];
   } else {
-    fibRetracement =
-      price >= fib["38.2"] &&
-      price <= fib["61.8"];
+    fibZone =
+      price >=
+        fib["38.2"] &&
+      price <=
+        fib["61.8"];
   }
 
-  const obTouch =
+  const zoneOverlap =
+    fibZone ||
     priceInside(
       price,
       orderBlock
-    );
-
-  const fvgTouch =
+    ) ||
     priceInside(
       price,
       fvg
     );
 
-  const recent =
-    candles.slice(-5);
-
-  const oppositeCount =
-    recent.filter(c =>
-      direction === "bullish"
-        ? c.close < c.open
-        : c.close > c.open
-    ).length;
+  if (!zoneOverlap) {
+    return {
+      valid:
+        false
+    };
+  }
 
   return {
     valid:
-      fibRetracement ||
-      obTouch ||
-      fvgTouch,
-
-    fibRetracement,
-
-    obTouch,
-
-    fvgTouch,
-
-    oppositeCount
+      true,
+    fibZone
   };
 }
 
@@ -2804,42 +2989,32 @@ function determineEntry(
   currentPrice,
   fib,
   orderBlock,
-  fvg,
-  direction
+  fvg
 ) {
   const candidates = [];
 
-  // Prefer OB.
   if (orderBlock) {
-    candidates.push({
-      value:
-        midpoint(
-          orderBlock.low,
-          orderBlock.high
-        ),
-      priority: 1
-    });
+    candidates.push(
+      midpoint(
+        orderBlock.low,
+        orderBlock.high
+      )
+    );
   }
 
-  // Then FVG.
   if (fvg) {
-    candidates.push({
-      value:
-        midpoint(
-          fvg.low,
-          fvg.high
-        ),
-      priority: 2
-    });
+    candidates.push(
+      midpoint(
+        fvg.low,
+        fvg.high
+      )
+    );
   }
 
-  // Then 50% Fib retracement.
   if (fib) {
-    candidates.push({
-      value:
-        fib["50"],
-      priority: 3
-    });
+    candidates.push(
+      fib["50"]
+    );
   }
 
   if (!candidates.length) {
@@ -2847,29 +3022,18 @@ function determineEntry(
   }
 
   candidates.sort(
-    (a, b) => {
-      const distance =
-        Math.abs(
-          a.value -
-          currentPrice
-        ) -
-        Math.abs(
-          b.value -
-          currentPrice
-        );
-
-      if (distance !== 0) {
-        return distance;
-      }
-
-      return (
-        a.priority -
-        b.priority
-      );
-    }
+    (a, b) =>
+      Math.abs(
+        a -
+        currentPrice
+      ) -
+      Math.abs(
+        b -
+        currentPrice
+      )
   );
 
-  return candidates[0].value;
+  return candidates[0];
 }
 
 
@@ -2891,87 +3055,139 @@ function determineStopLoss(
     return null;
   }
 
-  let sl;
-
   if (
-    direction === "bullish"
+    direction ===
+      "bullish"
   ) {
-    sl =
+    let sl =
       sweep
         ? sweep.level -
           atr * 0.10
-        : orderBlock.low -
-          atr * 0.10;
+        : entry -
+          atr;
 
     if (
       orderBlock &&
-      orderBlock.low < sl
+      orderBlock.low <
+        sl
     ) {
       sl =
         orderBlock.low -
         atr * 0.05;
     }
 
-    if (sl >= entry) {
-      return null;
-    }
-
-  } else {
-    sl =
-      sweep
-        ? sweep.level +
-          atr * 0.10
-        : orderBlock.high +
-          atr * 0.10;
-
-    if (
-      orderBlock &&
-      orderBlock.high > sl
-    ) {
-      sl =
-        orderBlock.high +
-        atr * 0.05;
-    }
-
-    if (sl <= entry) {
-      return null;
-    }
+    return sl < entry
+      ? sl
+      : null;
   }
 
-  return sl;
+  let sl =
+    sweep
+      ? sweep.level +
+        atr * 0.10
+      : entry +
+        atr;
+
+  if (
+    orderBlock &&
+    orderBlock.high >
+      sl
+  ) {
+    sl =
+      orderBlock.high +
+      atr * 0.05;
+  }
+
+  return sl > entry
+    ? sl
+    : null;
 }
 
 
 // ============================================================
-// CONFIRMATION SCORE
+// OPPOSING LIQUIDITY
 // ============================================================
 
-function calculateScore(x) {
+function blockedByOpposingLiquidity(
+  candles,
+  direction,
+  takeProfit
+) {
+  const structure =
+    detectStructure(
+      candles
+    );
+
+  const currentPrice =
+    candles[
+      candles.length - 1
+    ].close;
+
+  if (
+    direction ===
+      "bullish"
+  ) {
+    return structure.highs
+      .slice(-5)
+      .some(
+        swing =>
+          swing.price >
+            currentPrice &&
+          swing.price <
+            takeProfit
+      );
+  }
+
+  return structure.lows
+    .slice(-5)
+    .some(
+      swing =>
+        swing.price <
+          currentPrice &&
+        swing.price >
+          takeProfit
+    );
+}
+
+
+// ============================================================
+// SCORE
+// ============================================================
+
+function calculateScore(
+  x
+) {
   let score = 0;
 
   if (
     x.htfBias &&
-    x.htfBias !== "neutral"
+    x.structureBreak
   ) {
     score += 2;
   }
 
   if (x.crt) {
-    score += 1;
+    score += 2;
   }
 
-  // Optional.
   if (x.sweep) {
-    score += 1;
+    score += 2;
   }
 
-  if (x.structureBreak) {
-    score += 3;
+  if (
+    x.structureBreak
+  ) {
+    score += 2;
   }
 
-  // Mandatory OB.
+  if (
+    x.displacement
+  ) {
+    score += 2;
+  }
+
   if (x.orderBlock) {
-    score += 3;
+    score += 1;
   }
 
   if (x.fvg) {
@@ -2980,15 +3196,17 @@ function calculateScore(x) {
 
   if (
     x.fib &&
-    x.pullback &&
-    x.pullback.fibRetracement
+    x.pullback?.fibZone
   ) {
-    score += 2;
+    score += 1;
+  }
+
+  if (x.accumulation) {
+    score += 1;
   }
 
   if (
-    x.pullback &&
-    x.pullback.valid
+    x.pullback?.valid
   ) {
     score += 2;
   }
@@ -2998,122 +3216,16 @@ function calculateScore(x) {
 
 
 // ============================================================
-// TRADE REASON
-// ============================================================
-
-function buildTradeReason({
-  instrument,
-  direction,
-  currentPrice,
-  entry,
-  fib,
-  orderBlock,
-  sweep,
-  structureBreak
-}) {
-  const side =
-    direction === "bullish"
-      ? "buy"
-      : "sell";
-
-  const obLow =
-    roundPrice(
-      orderBlock.low
-    );
-
-  const obHigh =
-    roundPrice(
-      orderBlock.high
-    );
-
-  const fib50 =
-    roundPrice(
-      fib["50"]
-    );
-
-  const mssText =
-    structureBreak?.type ||
-    "structure break";
-
-  let reason =
-    `Price is showing a ${side} structure with a valid ${mssText} and a valid order block around ${obLow}–${obHigh}. `;
-
-  if (sweep) {
-    reason +=
-      `Liquidity was also swept around ${roundPrice(sweep.level)} before the move. `;
-  }
-
-  reason +=
-    `I like the ${side} only on the retracement toward the ${fib50} Fibonacci level / order block around the planned entry — don't chase at the current price.`;
-
-  return reason;
-}
-
-
-// ============================================================
-// DEVELOPING REASON
-// ============================================================
-
-function buildDevelopingReason({
-  instrument,
-  direction,
-  currentPrice,
-  entry,
-  rejection,
-  sweep,
-  structureBreak,
-  structure
-}) {
-  const side =
-    direction === "bullish"
-      ? "buy"
-      : "sell";
-
-  let reason =
-    `Price is developing a ${side} setup with market structure supporting the move. `;
-
-  if (rejection) {
-    reason +=
-      `Price is rejecting the ${roundPrice(rejection.level)} level. `;
-  }
-
-  if (structureBreak) {
-    reason +=
-      `A ${structureBreak.type} is developing around ${roundPrice(structureBreak.level)}. `;
-  }
-
-  if (sweep) {
-    reason +=
-      `Liquidity was swept around ${roundPrice(sweep.level)}. `;
-  }
-
-  reason +=
-    `I like the ${side} only on the retrace into the planned entry — don't chase at current price.`;
-
-  return reason;
-}
-
-
-// ============================================================
-// AUTOMATIC TELEGRAM SCANNER
+// TELEGRAM AUTOMATIC SCANNER
 // ============================================================
 
 async function runAutomaticScan(
   env
 ) {
-  if (!env.TELEGRAM_BOT_TOKEN) {
-    console.error(
-      "TELEGRAM_BOT_TOKEN is missing"
-    );
-
-    return;
-  }
-
-  if (!env.TELEGRAM_CHAT_ID) {
-    console.error(
-      "TELEGRAM_CHAT_ID is missing"
-    );
-
+  if (
+    !env.TELEGRAM_BOT_TOKEN ||
+    !env.DB
+  ) {
     return;
   }
 
@@ -3121,26 +3233,57 @@ async function runAutomaticScan(
     const signals =
       await generateSignals();
 
-    for (
-      const signal of signals
-    ) {
-      if (
-        signal.status ===
-        "NO SIGNAL"
-      ) {
-        continue;
-      }
+    const activeSignals =
+      signals.filter(
+        signal =>
+          signal.status !==
+          "NO SIGNAL"
+      );
 
+    if (
+      !activeSignals.length
+    ) {
+      console.log(
+        "CyberFX: no active signals"
+      );
+
+      return;
+    }
+
+    const subscribers =
+      await getTelegramSubscribers(
+        env
+      );
+
+    if (
+      !subscribers.length
+    ) {
+      console.log(
+        "CyberFX: no active Telegram subscribers"
+      );
+
+      return;
+    }
+
+    for (
+      const signal of
+      activeSignals
+    ) {
       const message =
         formatTelegramSignal(
           signal
         );
 
-      await sendTelegramMessage(
-        env.TELEGRAM_CHAT_ID,
-        message,
-        env.TELEGRAM_BOT_TOKEN
-      );
+      for (
+        const subscriber of
+        subscribers
+      ) {
+        await sendTelegramMessage(
+          subscriber.telegram_id,
+          message,
+          env.TELEGRAM_BOT_TOKEN
+        );
+      }
     }
 
   } catch (error) {
@@ -3153,7 +3296,39 @@ async function runAutomaticScan(
 
 
 // ============================================================
-// TELEGRAM HANDLER
+// GET TELEGRAM SUBSCRIBERS
+// ============================================================
+
+async function getTelegramSubscribers(
+  env
+) {
+  const result =
+    await env.DB.prepare(`
+      SELECT DISTINCT
+        tl.telegram_id,
+        tl.telegram_username,
+        u.email,
+        s.plan,
+        s.expires_at
+      FROM telegram_links tl
+      INNER JOIN users u
+        ON u.id = tl.user_id
+      INNER JOIN subscriptions s
+        ON s.user_id = u.id
+      WHERE s.status = 'active'
+        AND s.expires_at > ?
+    `)
+      .bind(
+        new Date().toISOString()
+      )
+      .all();
+
+  return result.results || [];
+}
+
+
+// ============================================================
+// TELEGRAM MESSAGE HANDLER
 // ============================================================
 
 async function handleTelegramMessage(
@@ -3164,71 +3339,115 @@ async function handleTelegramMessage(
     message.chat?.id;
 
   const text =
-    message.text || "";
+    String(
+      message.text || ""
+    ).trim();
 
   if (!chatId) {
     return;
   }
 
+  // ==========================================================
+  // START
+  // ==========================================================
+
   if (
     text === "/start"
   ) {
-    const welcome =
-      `🔥 Welcome to CyberFX!
-
-CyberFX is now connected.
-
-Signal levels:
-
-🟢 BUY REJECTION
-🔴 SELL REJECTION
-🟡 VALID BUY/SELL
-🔥 CONFIRMED BUY/SELL
-
-Markets:
-
-XAU/USD
-BTC/USD
-NASDAQ
-US OIL
-
-Timeframes:
-
-4H
-1H
-30M
-15M
-
-Target RR: 1:3`;
-
     await sendTelegramMessage(
       chatId,
-      welcome,
+
+      `🔥 CYBERFX
+
+Welcome.
+
+This Telegram channel is subscriber-only.
+
+Markets:
+• XAU/USD
+• BTC/USD
+• NASDAQ
+• US OIL
+
+Timeframes:
+• 15M
+• 30M
+• 1H
+• 4H
+
+Signal levels:
+🟢 BUY REJECTION
+🔴 SELL REJECTION
+🟡 VALID SETUP
+🔥 CONFIRMED
+
+Target RR: 1:3
+
+Subscribe on the CyberFX website and link your Telegram account to receive signals automatically.`,
+
       env.TELEGRAM_BOT_TOKEN
     );
 
     return;
   }
 
+  // ==========================================================
+  // CHECK SUBSCRIPTION
+  // ==========================================================
+
+  const subscriber =
+    await getActiveSubscriberByTelegramId(
+      chatId,
+      env
+    );
+
+  // ==========================================================
+  // SIGNAL
+  // ==========================================================
+
   if (
     text === "/signal" ||
     text === "/signals"
   ) {
+    if (!subscriber) {
+      await sendTelegramMessage(
+        chatId,
+
+        `🔒 CYBERFX
+
+Access denied.
+
+You need an active CyberFX subscription linked to this Telegram account before you can receive signals.
+
+Subscribe through the CyberFX website, then link your Telegram account.`,
+
+        env.TELEGRAM_BOT_TOKEN
+      );
+
+      return;
+    }
+
     try {
       const signals =
         await generateSignals();
 
       const activeSignals =
         signals.filter(
-          s =>
-            s.status !==
+          signal =>
+            signal.status !==
             "NO SIGNAL"
         );
 
-      if (!activeSignals.length) {
+      if (
+        !activeSignals.length
+      ) {
         await sendTelegramMessage(
           chatId,
-          "CYBERFX\n\nNo active rejection, valid setup, or confirmed signal at the moment.",
+
+          `CYBERFX
+
+No active rejection, valid setup, or confirmed signal at the moment.`,
+
           env.TELEGRAM_BOT_TOKEN
         );
 
@@ -3241,9 +3460,11 @@ Target RR: 1:3`;
       ) {
         await sendTelegramMessage(
           chatId,
+
           formatTelegramSignal(
             signal
           ),
+
           env.TELEGRAM_BOT_TOKEN
         );
       }
@@ -3256,10 +3477,81 @@ Target RR: 1:3`;
 
       await sendTelegramMessage(
         chatId,
-        "CYBERFX\n\nSignal engine temporarily unavailable.",
+
+        `CYBERFX
+
+Signal engine temporarily unavailable.`,
+
         env.TELEGRAM_BOT_TOKEN
       );
     }
+
+    return;
+  }
+
+  // ==========================================================
+  // SUBSCRIBE COMMAND
+  // ==========================================================
+
+  if (
+    text === "/subscribe"
+  ) {
+    await sendTelegramMessage(
+      chatId,
+
+      `💳 CYBERFX SUBSCRIPTION
+
+To receive private CyberFX signals:
+
+1. Open the CyberFX website.
+2. Create/login to your account.
+3. Choose your subscription plan.
+4. Complete payment.
+5. Link this Telegram account.
+
+After your active subscription is linked, signals will automatically be sent here.`,
+
+      env.TELEGRAM_BOT_TOKEN
+    );
+
+    return;
+  }
+
+  // ==========================================================
+  // STATUS
+  // ==========================================================
+
+  if (
+    text === "/status"
+  ) {
+    if (!subscriber) {
+      await sendTelegramMessage(
+        chatId,
+
+        `🔒 Subscription status: INACTIVE
+
+No active subscription is linked to this Telegram account.`,
+
+        env.TELEGRAM_BOT_TOKEN
+      );
+
+      return;
+    }
+
+    await sendTelegramMessage(
+      chatId,
+
+      `🟢 CYBERFX ACCESS ACTIVE
+
+Plan: ${subscriber.plan}
+
+Expires:
+${subscriber.expires_at}`,
+
+      env.TELEGRAM_BOT_TOKEN
+    );
+
+    return;
   }
 }
 
@@ -3271,101 +3563,109 @@ Target RR: 1:3`;
 function formatTelegramSignal(
   signal
 ) {
-  // ==========================================================
-  // REJECTION
-  // ==========================================================
-
   if (
     signal.status ===
     "REJECTION"
   ) {
     const icon =
-      signal.direction === "BUY"
+      signal.direction ===
+        "BUY"
         ? "🟢"
         : "🔴";
 
-    return `${icon} CYBERFX ${signal.direction} REJECTION
+    return `${icon} ${signal.direction} REJECTION
+
+CYBERFX
 
 ${signal.instrument}
 
 Entry TF: ${signal.entryTF}
 
-Rejection Level: ${signal.rejectionLevel}
+Rejection Level:
+${signal.rejectionLevel}
 
-Current Price: ${signal.price}
+Current Price:
+${signal.price}
 
-Reason:
-${signal.reason}
+${signal.message}
 
-⚠️ WATCH FOR RETRACEMENT`;
+⚠️ DEVELOPING OPPORTUNITY`;
   }
-
-  // ==========================================================
-  // VALID SETUP
-  // ==========================================================
 
   if (
     signal.status ===
     "VALID SETUP"
   ) {
-    return `🟡 CYBERFX VALID ${signal.direction}
+    return `🟡 CYBERFX VALID SETUP
 
-${signal.instrument}
+${signal.instrument} — ${signal.direction}
 
-Entry TF: ${signal.entryTF}
+Entry TF:
+${signal.entryTF}
 
-Entry: ${signal.entry}
+Entry:
+${signal.entry}
 
-SL: ${signal.stopLoss}
+Stop Loss:
+${signal.stopLoss}
 
-TP: ${signal.takeProfit}
+Take Profit:
+${signal.takeProfit}
 
-RR: 1:3
+Risk/Reward:
+1:3
 
-Reason:
-${signal.reason}
+Setup:
+${
+  signal.components?.length
+    ? signal.components
+        .map(
+          x => `• ${x}`
+        )
+        .join("\n")
+    : "• Developing structure"
+}
 
-⚠️ VALID SETUP — DO NOT CHASE PRICE`;
+⚠️ VALID SETUP — AWAITING FULL CONFIRMATION`;
   }
-
-  // ==========================================================
-  // CONFIRMED
-  // ==========================================================
 
   if (
     signal.status ===
     "CONFIRMED"
   ) {
-    return `🔥 CYBERFX CONFIRMED ${signal.direction}
+    return `🔥 CYBERFX SIGNAL
 
-${signal.instrument}
+${signal.instrument} — ${signal.direction}
 
-Entry TF: ${signal.entryTF}
+Entry TF:
+${signal.entryTF}
 
-Entry: ${signal.entry}
+Entry:
+${signal.entry}
 
-SL: ${signal.stopLoss}
+Stop Loss:
+${signal.stopLoss}
 
-TP: ${signal.takeProfit}
+Take Profit:
+${signal.takeProfit}
 
-RR: 1:3
+Risk/Reward:
+1:3
 
-Reason:
-${signal.reason}
-
-✅ CONFIRMED`;
+🔥 CONFIRMED`;
   }
 
   return `CYBERFX
 
 ${signal.instrument}
 
-Status: ${signal.status}`;
+Status:
+${signal.status}`;
 }
 
 
 // ============================================================
-// TELEGRAM API
+// TELEGRAM SEND
 // ============================================================
 
 async function sendTelegramMessage(
@@ -3374,7 +3674,7 @@ async function sendTelegramMessage(
   token
 ) {
   if (!token) {
-    return;
+    return null;
   }
 
   const response =
@@ -3390,13 +3690,24 @@ async function sendTelegramMessage(
 
         body:
           JSON.stringify({
-            chat_id: chatId,
+            chat_id:
+              String(chatId),
             text
           })
       }
     );
 
-  return response.json();
+  const result =
+    await response.json();
+
+  if (!result.ok) {
+    console.error(
+      "Telegram send error:",
+      result
+    );
+  }
+
+  return result;
 }
 
 
@@ -3413,9 +3724,11 @@ function average(
 
   return (
     values.reduce(
-      (a, b) => a + b,
+      (a, b) =>
+        a + b,
       0
-    ) / values.length
+    ) /
+    values.length
   );
 }
 
@@ -3424,7 +3737,9 @@ function midpoint(
   a,
   b
 ) {
-  return (a + b) / 2;
+  return (
+    a + b
+  ) / 2;
 }
 
 
@@ -3437,8 +3752,10 @@ function priceInside(
   }
 
   return (
-    price >= zone.low &&
-    price <= zone.high
+    price >=
+      zone.low &&
+    price <=
+      zone.high
   );
 }
 
@@ -3447,39 +3764,15 @@ function roundPrice(
   price
 ) {
   if (
-    !Number.isFinite(price)
+    !Number.isFinite(
+      price
+    )
   ) {
     return null;
   }
 
   return Number(
     price.toFixed(2)
-  );
-}
-
-
-function findRecentLow(
-  candles
-) {
-  return Math.min(
-    ...candles
-      .slice(-10)
-      .map(
-        c => c.low
-      )
-  );
-}
-
-
-function findRecentHigh(
-  candles
-) {
-  return Math.max(
-    ...candles
-      .slice(-10)
-      .map(
-        c => c.high
-      )
   );
 }
 
@@ -3494,7 +3787,10 @@ function formatTF(
     "4h": "4H"
   };
 
-  return names[tf] || tf;
+  return (
+    names[tf] ||
+    tf
+  );
 }
 
 
@@ -3507,7 +3803,9 @@ function json(
   status = 200
 ) {
   return new Response(
-    JSON.stringify(data),
+    JSON.stringify(
+      data
+    ),
     {
       status,
 
