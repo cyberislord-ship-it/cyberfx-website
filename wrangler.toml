@@ -8,5 +8,10 @@ compatibility_date = "2026-08-26"
 directory = "."
 binding = "ASSETS"
 
+[[d1_databases]]
+binding = "DB"
+database_name = "cyberfx-users"
+database_id = "b70244b6-7e8c-4420-bda7-475de2111c63"
+
 [triggers]
 crons = ["*/15 * * * *"]
