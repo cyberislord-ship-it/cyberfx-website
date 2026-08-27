@@ -6,12 +6,14 @@ export default {
     // HEALTH
     // =========================================================
     if (url.pathname === "/api/health") {
+      const biquoteConnected = await checkBiquote();
+
       return json({
         success: true,
         engine: "CyberFX",
         status: "online",
         market_data: "Biquote",
-        biquote_connected: true,
+        biquote_connected: biquoteConnected,
         telegram_connected: !!env.TELEGRAM_BOT_TOKEN,
         paystack_connected: !!env.PAYSTACK_SECRET_KEY,
         database_connected: !!env.DB
@@ -19,7 +21,7 @@ export default {
     }
 
     // =========================================================
-    // PAYMENT INITIALIZE
+    // PAYSTACK - INITIALIZE PAYMENT
     // =========================================================
     if (
       url.pathname === "/api/payment/initialize" &&
@@ -105,6 +107,11 @@ export default {
           !result.status ||
           !result.data
         ) {
+          console.error(
+            "Paystack initialize error:",
+            result
+          );
+
           return json({
             success: false,
             error:
@@ -119,18 +126,16 @@ export default {
             amount,
             plan,
             status,
-            email,
-            created_at
+            email
           )
-          VALUES (?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?)
         `)
           .bind(
             reference,
             selectedPlan.amount / 100,
             plan,
             "pending",
-            email,
-            new Date().toISOString()
+            email
           )
           .run();
 
@@ -142,7 +147,7 @@ export default {
           access_code:
             result.data.access_code,
           reference,
-          plan,
+          plan: selectedPlan.name,
           amount:
             selectedPlan.amount / 100
         });
@@ -163,7 +168,7 @@ export default {
     }
 
     // =========================================================
-    // PAYMENT VERIFY
+    // PAYSTACK - VERIFY
     // =========================================================
     if (
       url.pathname === "/api/payment/verify" &&
@@ -176,16 +181,18 @@ export default {
         if (!reference) {
           return json({
             success: false,
-            error: "Payment reference is required"
+            error:
+              "Payment reference is required"
           }, 400);
         }
 
-        return json(
+        const result =
           await verifyPaystackPayment(
             reference,
             env
-          )
-        );
+          );
+
+        return json(result);
 
       } catch (error) {
         console.error(
@@ -203,7 +210,7 @@ export default {
     }
 
     // =========================================================
-    // PAYMENT CALLBACK
+    // PAYSTACK CALLBACK
     // =========================================================
     if (
       url.pathname === "/api/payment/callback" &&
@@ -234,8 +241,7 @@ export default {
 
         if (
           result.success &&
-          result.payment_status ===
-            "success"
+          result.payment_status === "success"
         ) {
           return Response.redirect(
             `${url.origin}/?payment=success&reference=${encodeURIComponent(reference)}`,
@@ -249,6 +255,11 @@ export default {
         );
 
       } catch (error) {
+        console.error(
+          "Payment callback error:",
+          error
+        );
+
         return Response.redirect(
           `${url.origin}/?payment=failed`,
           302
@@ -274,8 +285,7 @@ export default {
 
         const email =
           String(
-            url.searchParams.get("email") ||
-            ""
+            url.searchParams.get("email") || ""
           )
             .trim()
             .toLowerCase();
@@ -305,11 +315,11 @@ export default {
           success: true,
           subscribed: true,
           active: true,
-          user_id:
-            subscription.user_id,
-          email,
-          plan:
-            subscription.plan,
+          plan: subscription.plan,
+          plan_name:
+            subscription.plan_name,
+          email:
+            subscription.email,
           starts_at:
             subscription.starts_at,
           expires_at:
@@ -317,6 +327,11 @@ export default {
         });
 
       } catch (error) {
+        console.error(
+          "Subscription check error:",
+          error
+        );
+
         return json({
           success: false,
           error:
@@ -327,7 +342,7 @@ export default {
     }
 
     // =========================================================
-    // MARKET DATA
+    // BIQUOTE MARKET DATA
     // =========================================================
     if (url.pathname === "/api/signals") {
       try {
@@ -336,8 +351,8 @@ export default {
 
         return json({
           success: true,
-          source: "Biquote",
           engine: "CyberFX",
+          source: "Biquote",
           markets:
             Object.keys(INSTRUMENTS),
           timeframes:
@@ -348,10 +363,14 @@ export default {
         });
 
       } catch (error) {
+        console.error(
+          "Biquote market data error:",
+          error
+        );
+
         return json({
           success: false,
           engine: "CyberFX",
-          source: "Biquote",
           error:
             error?.message ||
             String(error)
@@ -363,7 +382,8 @@ export default {
     // GENERATE SIGNALS
     // =========================================================
     if (
-      url.pathname === "/api/generate-signals"
+      url.pathname ===
+      "/api/generate-signals"
     ) {
       try {
         const result =
@@ -383,6 +403,11 @@ export default {
         });
 
       } catch (error) {
+        console.error(
+          "Signal engine error:",
+          error
+        );
+
         return json({
           success: false,
           engine: "CyberFX",
@@ -397,7 +422,8 @@ export default {
     // TELEGRAM WEBHOOK
     // =========================================================
     if (
-      url.pathname === "/telegram/webhook" &&
+      url.pathname ===
+        "/telegram/webhook" &&
       request.method === "POST"
     ) {
       try {
@@ -407,7 +433,8 @@ export default {
         if (update.message) {
           await handleTelegramMessage(
             update.message,
-            env
+            env,
+            url.origin
           );
         }
 
@@ -434,7 +461,7 @@ export default {
   },
 
   // =========================================================
-  // AUTOMATIC 15-MINUTE SCANNER
+  // AUTOMATIC 15-MINUTE SCAN
   // =========================================================
   async scheduled(event, env, ctx) {
     ctx.waitUntil(
@@ -442,6 +469,22 @@ export default {
     );
   }
 };
+
+
+// ============================================================
+// OWNER
+// ============================================================
+
+const OWNER_TELEGRAM_ID =
+  "8368477940";
+
+
+// ============================================================
+// WEBSITE
+// ============================================================
+
+const WEBSITE_URL =
+  "https://cyberfx-website.cybertradingsignal.workers.dev/";
 
 
 // ============================================================
@@ -489,6 +532,7 @@ const INSTRUMENTS = {
 
 // ============================================================
 // TIMEFRAMES
+// NO 1D
 // ============================================================
 
 const TIMEFRAMES = [
@@ -496,24 +540,23 @@ const TIMEFRAMES = [
     name: "15min",
     interval: "15m"
   },
+
   {
     name: "30min",
     interval: "30m"
   },
+
   {
     name: "1h",
     interval: "1h"
   },
+
   {
     name: "4h",
     interval: "4h"
   }
 ];
 
-
-// ============================================================
-// ENTRY TIMEFRAMES
-// ============================================================
 
 const ENTRY_TIMEFRAMES = [
   "15min",
@@ -523,431 +566,86 @@ const ENTRY_TIMEFRAMES = [
 ];
 
 
-// ============================================================
-// CONFIRMATION
-// ============================================================
-
 const CONFIRMED_SCORE = 13;
 
 
+const SIGNAL_PRIORITY = {
+  "REJECTION": 1,
+  "VALID SETUP": 2,
+  "CONFIRMED": 3
+};
+
+
 // ============================================================
-// PAYSTACK VERIFY
+// BIQUOTE HEALTH
 // ============================================================
 
-async function verifyPaystackPayment(
-  reference,
-  env
+async function checkBiquote() {
+  try {
+    const response =
+      await fetch(
+        "https://biquote.io/health"
+      );
+
+    return response.ok;
+
+  } catch {
+    return false;
+  }
+}
+
+
+// ============================================================
+// BIQUOTE OHLC
+// ============================================================
+
+async function getCandles(
+  symbol,
+  interval
 ) {
-  if (!env.PAYSTACK_SECRET_KEY) {
-    throw new Error(
-      "PAYSTACK_SECRET_KEY is missing"
+  const apiUrl =
+    new URL(
+      `https://biquote.io/api/${encodeURIComponent(symbol)}/ohlc`
     );
-  }
 
-  if (!env.DB) {
-    throw new Error(
-      "D1 database binding DB is missing"
-    );
-  }
+  apiUrl.searchParams.set(
+    "interval",
+    interval
+  );
+
+  apiUrl.searchParams.set(
+    "limit",
+    "200"
+  );
 
   const response =
-    await fetch(
-      `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
-      {
-        headers: {
-          Authorization:
-            `Bearer ${env.PAYSTACK_SECRET_KEY}`
-        }
-      }
-    );
+    await fetch(apiUrl);
 
   const result =
     await response.json();
 
   if (
     !response.ok ||
-    !result.status ||
-    !result.data
+    !Array.isArray(result.bars)
   ) {
     return {
-      success: false,
-      payment_status: "failed",
-      error:
+      status: "error",
+      symbol,
+      interval,
+      message:
         result.message ||
-        "Unable to verify payment"
+        result.error ||
+        "Biquote request failed"
     };
-  }
-
-  const transaction =
-    result.data;
-
-  if (
-    transaction.status !==
-    "success"
-  ) {
-    await env.DB.prepare(`
-      UPDATE payments
-      SET status = ?
-      WHERE reference = ?
-    `)
-      .bind(
-        transaction.status ||
-          "failed",
-        reference
-      )
-      .run();
-
-    return {
-      success: false,
-      payment_status:
-        transaction.status ||
-        "failed",
-      reference
-    };
-  }
-
-  const email =
-    String(
-      transaction.customer?.email ||
-      ""
-    )
-      .trim()
-      .toLowerCase();
-
-  if (!email) {
-    return {
-      success: false,
-      payment_status: "failed",
-      error:
-        "Paystack did not return customer email"
-    };
-  }
-
-  let plan =
-    transaction.metadata?.cyberfx_plan;
-
-  if (
-    !plan ||
-    !PLANS[plan]
-  ) {
-    const existing =
-      await env.DB.prepare(`
-        SELECT plan
-        FROM payments
-        WHERE reference = ?
-        LIMIT 1
-      `)
-        .bind(reference)
-        .first();
-
-    plan =
-      existing?.plan;
-  }
-
-  if (
-    !plan ||
-    !PLANS[plan]
-  ) {
-    return {
-      success: false,
-      payment_status: "failed",
-      error:
-        "Unable to determine subscription plan"
-    };
-  }
-
-  const selectedPlan =
-    PLANS[plan];
-
-  if (
-    Number(transaction.amount) !==
-    Number(selectedPlan.amount)
-  ) {
-    await env.DB.prepare(`
-      UPDATE payments
-      SET status = ?
-      WHERE reference = ?
-    `)
-      .bind(
-        "amount_mismatch",
-        reference
-      )
-      .run();
-
-    return {
-      success: false,
-      payment_status:
-        "amount_mismatch"
-    };
-  }
-
-  const payment =
-    await env.DB.prepare(`
-      SELECT *
-      FROM payments
-      WHERE reference = ?
-      LIMIT 1
-    `)
-      .bind(reference)
-      .first();
-
-  if (
-    payment?.status ===
-    "success"
-  ) {
-    return {
-      success: true,
-      payment_status: "success",
-      reference,
-      email,
-      plan
-    };
-  }
-
-  const user =
-    await env.DB.prepare(`
-      SELECT id, email
-      FROM users
-      WHERE LOWER(email) = ?
-      LIMIT 1
-    `)
-      .bind(email)
-      .first();
-
-  if (!user) {
-    return {
-      success: false,
-      payment_status: "success",
-      reference,
-      error:
-        "Payment succeeded, but no CyberFX website account exists for this email"
-    };
-  }
-
-  const now =
-    new Date();
-
-  const existingSubscription =
-    await env.DB.prepare(`
-      SELECT *
-      FROM subscriptions
-      WHERE user_id = ?
-      AND status = 'active'
-      AND expires_at > ?
-      ORDER BY expires_at DESC
-      LIMIT 1
-    `)
-      .bind(
-        user.id,
-        now.toISOString()
-      )
-      .first();
-
-  let startDate =
-    now;
-
-  if (
-    existingSubscription?.expires_at
-  ) {
-    startDate =
-      new Date(
-        existingSubscription.expires_at
-      );
-  }
-
-  const expires =
-    addMonths(
-      startDate,
-      selectedPlan.months
-    );
-
-  await env.DB.prepare(`
-    UPDATE payments
-    SET
-      status = ?,
-      paid_at = ?
-    WHERE reference = ?
-  `)
-    .bind(
-      "success",
-      now.toISOString(),
-      reference
-    )
-    .run();
-
-  if (existingSubscription) {
-    await env.DB.prepare(`
-      UPDATE subscriptions
-      SET
-        plan = ?,
-        paystack_reference = ?,
-        status = 'active',
-        starts_at = ?,
-        expires_at = ?
-      WHERE id = ?
-    `)
-      .bind(
-        plan,
-        reference,
-        startDate.toISOString(),
-        expires.toISOString(),
-        existingSubscription.id
-      )
-      .run();
-
-  } else {
-    await env.DB.prepare(`
-      INSERT INTO subscriptions (
-        user_id,
-        plan,
-        paystack_reference,
-        status,
-        starts_at,
-        expires_at
-      )
-      VALUES (?, ?, ?, 'active', ?, ?)
-    `)
-      .bind(
-        user.id,
-        plan,
-        reference,
-        startDate.toISOString(),
-        expires.toISOString()
-      )
-      .run();
   }
 
   return {
-    success: true,
-    payment_status: "success",
-    reference,
-    email,
-    user_id: user.id,
-    plan,
-    starts_at:
-      startDate.toISOString(),
-    expires_at:
-      expires.toISOString()
+    status: "success",
+    symbol,
+    interval,
+    candles:
+      result.bars
   };
-}
-
-
-// ============================================================
-// ACTIVE SUBSCRIPTION BY EMAIL
-// ============================================================
-
-async function getActiveSubscriptionByEmail(
-  email,
-  env
-) {
-  if (!env.DB) {
-    return null;
-  }
-
-  return env.DB.prepare(`
-    SELECT
-      s.id,
-      s.user_id,
-      s.plan,
-      s.status,
-      s.starts_at,
-      s.expires_at
-    FROM subscriptions s
-    INNER JOIN users u
-      ON u.id = s.user_id
-    WHERE LOWER(u.email) = ?
-      AND s.status = 'active'
-      AND s.expires_at > ?
-    ORDER BY s.expires_at DESC
-    LIMIT 1
-  `)
-    .bind(
-      email,
-      new Date().toISOString()
-    )
-    .first();
-}
-
-
-// ============================================================
-// ACTIVE SUBSCRIPTION BY TELEGRAM ID
-// ============================================================
-
-async function getActiveSubscriberByTelegramId(
-  telegramId,
-  env
-) {
-  if (!env.DB) {
-    return null;
-  }
-
-  return env.DB.prepare(`
-    SELECT
-      u.id AS user_id,
-      u.email,
-      s.plan,
-      s.status,
-      s.starts_at,
-      s.expires_at,
-      tl.telegram_id,
-      tl.telegram_username
-    FROM telegram_links tl
-    INNER JOIN users u
-      ON u.id = tl.user_id
-    INNER JOIN subscriptions s
-      ON s.user_id = u.id
-    WHERE tl.telegram_id = ?
-      AND s.status = 'active'
-      AND s.expires_at > ?
-    ORDER BY s.expires_at DESC
-    LIMIT 1
-  `)
-    .bind(
-      String(telegramId),
-      new Date().toISOString()
-    )
-    .first();
-}
-
-
-// ============================================================
-// ADD MONTHS
-// ============================================================
-
-function addMonths(
-  date,
-  months
-) {
-  const result =
-    new Date(date);
-
-  const originalDay =
-    result.getUTCDate();
-
-  result.setUTCDate(1);
-
-  result.setUTCMonth(
-    result.getUTCMonth() +
-      months
-  );
-
-  const lastDay =
-    new Date(
-      Date.UTC(
-        result.getUTCFullYear(),
-        result.getUTCMonth() + 1,
-        0
-      )
-    ).getUTCDate();
-
-  result.setUTCDate(
-    Math.min(
-      originalDay,
-      lastDay
-    )
-  );
-
-  return result;
 }
 
 
@@ -982,90 +680,7 @@ async function loadAllMarkets() {
 
 
 // ============================================================
-// BIQUOTE OHLC
-// ============================================================
-
-async function getCandles(
-  symbol,
-  interval
-) {
-  const apiUrl =
-    new URL(
-      `https://biquote.io/api/${encodeURIComponent(symbol)}/ohlc`
-    );
-
-  apiUrl.searchParams.set(
-    "interval",
-    interval
-  );
-
-  apiUrl.searchParams.set(
-    "limit",
-    "150"
-  );
-
-  try {
-    const response =
-      await fetch(apiUrl, {
-        headers: {
-          Accept:
-            "application/json"
-        }
-      });
-
-    const result =
-      await response.json();
-
-    if (
-      !response.ok
-    ) {
-      return {
-        status: "error",
-        code:
-          response.status,
-        message:
-          result?.message ||
-          result?.error ||
-          "Biquote request failed",
-        symbol,
-        interval
-      };
-    }
-
-    const bars =
-      Array.isArray(
-        result.bars
-      )
-        ? result.bars
-        : [];
-
-    return {
-      status: "success",
-      source: "Biquote",
-      symbol:
-        result.symbol ||
-        symbol,
-      interval:
-        result.interval ||
-        interval,
-      candles: bars
-    };
-
-  } catch (error) {
-    return {
-      status: "error",
-      symbol,
-      interval,
-      message:
-        error?.message ||
-        String(error)
-    };
-  }
-}
-
-
-// ============================================================
-// MAIN SIGNAL ENGINE
+// GENERATE SIGNALS
 // ============================================================
 
 async function generateSignals() {
@@ -1076,9 +691,7 @@ async function generateSignals() {
 
   for (
     const instrument
-    of Object.keys(
-      INSTRUMENTS
-    )
+    of Object.keys(INSTRUMENTS)
   ) {
     const market =
       marketData[instrument];
@@ -1119,13 +732,6 @@ async function generateSignals() {
       continue;
     }
 
-    const tfPriority = {
-      "4h": 4,
-      "1h": 3,
-      "30min": 2,
-      "15min": 1
-    };
-
     candidates.sort(
       (a, b) => {
         const quality =
@@ -1141,12 +747,12 @@ async function generateSignals() {
         }
 
         return (
-          (tfPriority[
+          tfPriority(
             b.entryTFRaw
-          ] || 0) -
-          (tfPriority[
+          ) -
+          tfPriority(
             a.entryTFRaw
-          ] || 0)
+          )
         );
       }
     );
@@ -1157,6 +763,22 @@ async function generateSignals() {
   }
 
   return results;
+}
+
+
+// ============================================================
+// TIMEFRAME PRIORITY
+// ============================================================
+
+function tfPriority(tf) {
+  const priority = {
+    "4h": 4,
+    "1h": 3,
+    "30min": 2,
+    "15min": 1
+  };
+
+  return priority[tf] || 0;
 }
 
 
@@ -1193,9 +815,7 @@ function analyzeInstrument(
       c => !c.isOpen
     );
 
-  if (
-    closed.length < 30
-  ) {
+  if (closed.length < 30) {
     return null;
   }
 
@@ -1213,6 +833,10 @@ function analyzeInstrument(
     detectStructure(
       closed
     );
+
+  // ----------------------------------------------------------
+  // REJECTION
+  // ----------------------------------------------------------
 
   const rejection =
     detectRejection(
@@ -1240,6 +864,10 @@ function analyzeInstrument(
       );
   }
 
+  // ----------------------------------------------------------
+  // CRT
+  // ----------------------------------------------------------
+
   const accumulation =
     detectAccumulation(
       closed
@@ -1251,12 +879,20 @@ function analyzeInstrument(
       accumulation
     );
 
+  // ----------------------------------------------------------
+  // LIQUIDITY
+  // ----------------------------------------------------------
+
   const sweep =
     detectLiquiditySweep(
       closed,
       crt,
       structure
     );
+
+  // ----------------------------------------------------------
+  // DIRECTION
+  // ----------------------------------------------------------
 
   const direction =
     determineDevelopingDirection(
@@ -1270,11 +906,19 @@ function analyzeInstrument(
     return bestResult;
   }
 
+  // ----------------------------------------------------------
+  // DISPLACEMENT
+  // ----------------------------------------------------------
+
   const displacement =
     detectDisplacement(
       closed,
       sweep
     );
+
+  // ----------------------------------------------------------
+  // BOS / MSS
+  // ----------------------------------------------------------
 
   const structureBreak =
     detectBOSMSS(
@@ -1282,6 +926,10 @@ function analyzeInstrument(
       structure,
       displacement
     );
+
+  // ----------------------------------------------------------
+  // VALID SETUP
+  // ----------------------------------------------------------
 
   const validSetup =
     detectValidSetup(
@@ -1318,15 +966,19 @@ function analyzeInstrument(
         SIGNAL_PRIORITY[
           setupSignal.status
         ] >
-          SIGNAL_PRIORITY[
-            bestResult.status
-          ]
+        SIGNAL_PRIORITY[
+          bestResult.status
+        ]
       )
     ) {
       bestResult =
         setupSignal;
     }
   }
+
+  // ----------------------------------------------------------
+  // FULL CONFIRMATION
+  // ----------------------------------------------------------
 
   if (
     !crt ||
@@ -1430,16 +1082,6 @@ function analyzeInstrument(
       ? entry + risk * 3
       : entry - risk * 3;
 
-  if (
-    blockedByOpposingLiquidity(
-      closed,
-      structureBreak.direction,
-      takeProfit
-    )
-  ) {
-    return bestResult;
-  }
-
   const score =
     calculateScore({
       htfBias,
@@ -1463,7 +1105,7 @@ function analyzeInstrument(
 
     direction:
       structureBreak.direction ===
-      "bullish"
+        "bullish"
         ? "BUY"
         : "SELL",
 
@@ -1482,15 +1124,13 @@ function analyzeInstrument(
     takeProfit:
       roundPrice(takeProfit),
 
-    riskReward:
-      "1:3",
+    riskReward: "1:3",
 
-    status:
-      "CONFIRMED",
+    status: "CONFIRMED",
 
     label:
       structureBreak.direction ===
-      "bullish"
+        "bullish"
         ? "🔥 CONFIRMED BUY"
         : "🔥 CONFIRMED SELL",
 
@@ -1566,11 +1206,12 @@ function detectRejection(
 
   if (
     atr &&
-    range <
-      atr * 0.35
+    range < atr * 0.35
   ) {
     return null;
   }
+
+  // BUY REJECTION
 
   if (
     lowerWick >=
@@ -1611,6 +1252,8 @@ function detectRejection(
       };
     }
   }
+
+  // SELL REJECTION
 
   if (
     upperWick >=
@@ -1720,9 +1363,7 @@ function detectValidSetup(
 ) {
   let score = 0;
 
-  if (
-    htfBias === direction
-  ) {
+  if (htfBias === direction) {
     score += 2;
   }
 
@@ -1801,8 +1442,7 @@ function buildRejectionSignal(
     entryTFRaw:
       entryTF,
 
-    status:
-      "REJECTION",
+    status: "REJECTION",
 
     label:
       direction === "BUY"
@@ -1857,6 +1497,19 @@ function buildValidSetupSignal(
       candles.length - 1
     ];
 
+  let entry =
+    current.close;
+
+  if (rejection?.level) {
+    entry =
+      rejection.level;
+  }
+
+  if (sweep?.level) {
+    entry =
+      sweep.level;
+  }
+
   const atr =
     ATR(candles);
 
@@ -1864,29 +1517,27 @@ function buildValidSetupSignal(
     return null;
   }
 
-  let entry =
-    current.close;
+  let stopLoss;
 
-  if (sweep?.level) {
-    entry =
-      sweep.level;
-  }
-
-  if (rejection?.level) {
-    entry =
-      rejection.level;
-  }
-
-  const stopLoss =
+  if (
     direction === "bullish"
-      ? entry -
-        (
-          atr * 0.25
-        )
-      : entry +
-        (
-          atr * 0.25
-        );
+  ) {
+    stopLoss =
+      (
+        sweep?.level ||
+        rejection?.level ||
+        current.low
+      ) -
+      atr * 0.25;
+  } else {
+    stopLoss =
+      (
+        sweep?.level ||
+        rejection?.level ||
+        current.high
+      ) +
+      atr * 0.25;
+  }
 
   const risk =
     direction === "bullish"
@@ -1904,9 +1555,7 @@ function buildValidSetupSignal(
 
   const components = [];
 
-  if (
-    htfBias === direction
-  ) {
+  if (htfBias === direction) {
     components.push(
       "HTF Bias"
     );
@@ -1946,9 +1595,7 @@ function buildValidSetupSignal(
   }
 
   if (crt) {
-    components.push(
-      "CRT"
-    );
+    components.push("CRT");
   }
 
   return {
@@ -1972,10 +1619,11 @@ function buildValidSetupSignal(
       roundPrice(stopLoss),
 
     takeProfit:
-      roundPrice(takeProfit),
+      roundPrice(
+        takeProfit
+      ),
 
-    riskReward:
-      "1:3",
+    riskReward: "1:3",
 
     status:
       "VALID SETUP",
@@ -1985,7 +1633,16 @@ function buildValidSetupSignal(
         ? "🟡 VALID BUY SETUP"
         : "🟡 VALID SELL SETUP",
 
-    components
+    components,
+
+    internal: {
+      htfBias,
+      crt,
+      sweep,
+      displacement,
+      structureBreak,
+      rejection
+    }
   };
 }
 
@@ -2017,14 +1674,15 @@ function normalizeCandles(
         Number(c.close),
 
       volume:
+        Number(c.volume || 0),
+
+      tickVolume:
         Number(
-          c.volume ||
-          c.tickVolume ||
-          0
+          c.tickVolume || 0
         ),
 
       isOpen:
-        c.isOpen === true
+        Boolean(c.isOpen)
     }))
     .filter(c =>
       Number.isFinite(
@@ -2067,10 +1725,8 @@ function ATR(
 
   for (
     let i =
-      candles.length -
-      period;
-    i <
-      candles.length;
+      candles.length - period;
+    i < candles.length;
     i++
   ) {
     const current =
@@ -2158,8 +1814,7 @@ function detectStructure(
     lows.length < 2
   ) {
     return {
-      direction:
-        "neutral",
+      direction: "neutral",
       highs,
       lows
     };
@@ -2190,8 +1845,7 @@ function detectStructure(
     l2.price > l1.price
   ) {
     return {
-      direction:
-        "bullish",
+      direction: "bullish",
       highs,
       lows
     };
@@ -2202,16 +1856,14 @@ function detectStructure(
     l2.price < l1.price
   ) {
     return {
-      direction:
-        "bearish",
+      direction: "bearish",
       highs,
       lows
     };
   }
 
   return {
-    direction:
-      "neutral",
+    direction: "neutral",
     highs,
     lows
   };
@@ -2219,7 +1871,8 @@ function detectStructure(
 
 
 // ============================================================
-// HTF BIAS
+// HIGHER TIMEFRAME BIAS
+// 4H + 1H only
 // ============================================================
 
 function determineHTFBias(
@@ -2227,8 +1880,7 @@ function determineHTFBias(
 ) {
   const frames = [
     "4h",
-    "1h",
-    "30min"
+    "1h"
   ];
 
   let bullish = 0;
@@ -2255,9 +1907,7 @@ function determineHTFBias(
         c => !c.isOpen
       );
 
-    if (
-      candles.length < 30
-    ) {
+    if (candles.length < 30) {
       continue;
     }
 
@@ -2286,6 +1936,14 @@ function determineHTFBias(
   }
 
   if (bearish >= 2) {
+    return "bearish";
+  }
+
+  if (bullish > bearish) {
+    return "bullish";
+  }
+
+  if (bearish > bullish) {
     return "bearish";
   }
 
@@ -2336,8 +1994,42 @@ function detectAccumulation(
 
   if (
     !atr ||
-    range >
-      atr * 2
+    range > atr * 2
+  ) {
+    return null;
+  }
+
+  let upperTouches = 0;
+  let lowerTouches = 0;
+
+  const tolerance =
+    range * 0.15;
+
+  for (
+    const candle of recent
+  ) {
+    if (
+      Math.abs(
+        candle.high -
+        high
+      ) <= tolerance
+    ) {
+      upperTouches++;
+    }
+
+    if (
+      Math.abs(
+        candle.low -
+        low
+      ) <= tolerance
+    ) {
+      lowerTouches++;
+    }
+  }
+
+  if (
+    upperTouches < 2 &&
+    lowerTouches < 2
   ) {
     return null;
   }
@@ -2346,8 +2038,7 @@ function detectAccumulation(
     high,
     low,
     range,
-    candles:
-      lookback
+    candles: lookback
   };
 }
 
@@ -2380,8 +2071,7 @@ function detectCRT(
     !range ||
     (
       atr &&
-      range <
-        atr * 0.15
+      range < atr * 0.15
     )
   ) {
     return null;
@@ -2423,35 +2113,71 @@ function detectLiquiditySweep(
   }
 
   if (
-    current.low <
-      crt.low &&
-    current.close >
-      crt.low
+    current.low < crt.low &&
+    current.close > crt.low
   ) {
     return {
-      direction:
-        "bullish",
-      level:
-        crt.low,
-      candle:
-        current
+      direction: "bullish",
+      level: crt.low,
+      candle: current
     };
   }
 
   if (
-    current.high >
-      crt.high &&
-    current.close <
-      crt.high
+    current.high > crt.high &&
+    current.close < crt.high
   ) {
     return {
-      direction:
-        "bearish",
-      level:
-        crt.high,
-      candle:
-        current
+      direction: "bearish",
+      level: crt.high,
+      candle: current
     };
+  }
+
+  if (
+    structure?.lows?.length
+  ) {
+    const swingLow =
+      structure.lows[
+        structure.lows.length - 1
+      ];
+
+    if (
+      current.low <
+        swingLow.price &&
+      current.close >
+        swingLow.price
+    ) {
+      return {
+        direction: "bullish",
+        level:
+          swingLow.price,
+        candle: current
+      };
+    }
+  }
+
+  if (
+    structure?.highs?.length
+  ) {
+    const swingHigh =
+      structure.highs[
+        structure.highs.length - 1
+      ];
+
+    if (
+      current.high >
+        swingHigh.price &&
+      current.close <
+        swingHigh.price
+    ) {
+      return {
+        direction: "bearish",
+        level:
+          swingHigh.price,
+        candle: current
+      };
+    }
   }
 
   return null;
@@ -2482,8 +2208,7 @@ function detectDisplacement(
     );
 
   if (
-    previous10.length <
-    10
+    previous10.length < 10
   ) {
     return null;
   }
@@ -2517,10 +2242,9 @@ function detectDisplacement(
     body / range;
 
   const closeLocation =
-    (
-      current.close -
-      current.low
-    ) / range;
+    (current.close -
+      current.low) /
+    range;
 
   const bullish =
     current.close >
@@ -2534,18 +2258,14 @@ function detectDisplacement(
     sweep.direction ===
       "bullish" &&
     bullish &&
-    closeLocation >=
-      0.75 &&
+    closeLocation >= 0.75 &&
     body >=
       averageBody * 1.5 &&
-    bodyRatio >=
-      0.60
+    bodyRatio >= 0.60
   ) {
     return {
-      direction:
-        "bullish",
-      candle:
-        current,
+      direction: "bullish",
+      candle: current,
       body,
       range
     };
@@ -2555,18 +2275,14 @@ function detectDisplacement(
     sweep.direction ===
       "bearish" &&
     bearish &&
-    closeLocation <=
-      0.25 &&
+    closeLocation <= 0.25 &&
     body >=
       averageBody * 1.5 &&
-    bodyRatio >=
-      0.60
+    bodyRatio >= 0.60
   ) {
     return {
-      direction:
-        "bearish",
-      candle:
-        current,
+      direction: "bearish",
+      candle: current,
       body,
       range
     };
@@ -2603,8 +2319,7 @@ function detectBOSMSS(
   ) {
     const previousHigh =
       structure.highs[
-        structure.highs.length -
-        1
+        structure.highs.length - 1
       ];
 
     if (
@@ -2613,13 +2328,14 @@ function detectBOSMSS(
         previousHigh.price
     ) {
       return {
-        direction:
-          "bullish",
+        direction: "bullish",
+
         type:
           structure.direction ===
-          "bearish"
+            "bearish"
             ? "MSS"
             : "BOS",
+
         level:
           previousHigh.price
       };
@@ -2632,8 +2348,7 @@ function detectBOSMSS(
   ) {
     const previousLow =
       structure.lows[
-        structure.lows.length -
-        1
+        structure.lows.length - 1
       ];
 
     if (
@@ -2642,13 +2357,14 @@ function detectBOSMSS(
         previousLow.price
     ) {
       return {
-        direction:
-          "bearish",
+        direction: "bearish",
+
         type:
           structure.direction ===
-          "bullish"
+            "bullish"
             ? "MSS"
             : "BOS",
+
         level:
           previousLow.price
       };
@@ -2680,20 +2396,16 @@ function getImpulseLeg(
       "bullish"
   ) {
     return {
-      direction:
-        "bullish",
-      low:
-        sweep.level,
+      direction: "bullish",
+      low: sweep.level,
       high:
         structureBreak.level
     };
   }
 
   return {
-    direction:
-      "bearish",
-    high:
-      sweep.level,
+    direction: "bearish",
+    high: sweep.level,
     low:
       structureBreak.level
   };
@@ -2717,14 +2429,14 @@ function calculateFib(
     impulse.low;
 
   if (
+    !Number.isFinite(range) ||
     range <= 0
   ) {
     return null;
   }
 
   if (
-    direction ===
-      "bullish"
+    direction === "bullish"
   ) {
     return {
       "38.2":
@@ -2806,8 +2518,7 @@ function findOrderBlock(
         candle.open
     ) {
       return {
-        direction:
-          "bullish",
+        direction: "bullish",
         high:
           candle.high,
         low:
@@ -2824,8 +2535,7 @@ function findOrderBlock(
         candle.open
     ) {
       return {
-        direction:
-          "bearish",
+        direction: "bearish",
         high:
           candle.high,
         low:
@@ -2872,32 +2582,24 @@ function findFVG(
   if (
     displacement.direction ===
       "bullish" &&
-    c1.high <
-      c3.low
+    c1.high < c3.low
   ) {
     return {
-      direction:
-        "bullish",
-      low:
-        c1.high,
-      high:
-        c3.low
+      direction: "bullish",
+      low: c1.high,
+      high: c3.low
     };
   }
 
   if (
     displacement.direction ===
       "bearish" &&
-    c1.low >
-      c3.high
+    c1.low > c3.high
   ) {
     return {
-      direction:
-        "bearish",
-      low:
-        c3.high,
-      high:
-        c1.low
+      direction: "bearish",
+      low: c3.high,
+      high: c1.low
     };
   }
 
@@ -2906,7 +2608,7 @@ function findFVG(
 
 
 // ============================================================
-// PULLBACK
+// HEALTHY PULLBACK
 // ============================================================
 
 function validatePullback(
@@ -2922,8 +2624,7 @@ function validatePullback(
     !impulse
   ) {
     return {
-      valid:
-        false
+      valid: false
     };
   }
 
@@ -2935,24 +2636,18 @@ function validatePullback(
   const price =
     current.close;
 
-  let fibZone =
-    false;
+  let fibZone = false;
 
   if (
-    direction ===
-      "bullish"
+    direction === "bullish"
   ) {
     fibZone =
-      price <=
-        fib["38.2"] &&
-      price >=
-        fib["61.8"];
+      price <= fib["38.2"] &&
+      price >= fib["61.8"];
   } else {
     fibZone =
-      price >=
-        fib["38.2"] &&
-      price <=
-        fib["61.8"];
+      price >= fib["38.2"] &&
+      price <= fib["61.8"];
   }
 
   const zoneOverlap =
@@ -2968,15 +2663,32 @@ function validatePullback(
 
   if (!zoneOverlap) {
     return {
-      valid:
-        false
+      valid: false
     };
   }
 
+  const recent =
+    candles.slice(-5);
+
+  const oppositeCount =
+    recent.filter(
+      c =>
+        direction ===
+          "bullish"
+          ? c.close <
+            c.open
+          : c.close >
+            c.open
+    ).length;
+
   return {
     valid:
-      true,
-    fibZone
+      oppositeCount >= 2 ||
+      fibZone,
+
+    fibZone,
+
+    oppositeCount
   };
 }
 
@@ -2989,7 +2701,8 @@ function determineEntry(
   currentPrice,
   fib,
   orderBlock,
-  fvg
+  fvg,
+  direction
 ) {
   const candidates = [];
 
@@ -3055,98 +2768,52 @@ function determineStopLoss(
     return null;
   }
 
+  let sl;
+
   if (
     direction ===
       "bullish"
   ) {
-    let sl =
+    sl =
       sweep
         ? sweep.level -
           atr * 0.10
-        : entry -
-          atr;
+        : entry - atr;
 
     if (
       orderBlock &&
-      orderBlock.low <
-        sl
+      orderBlock.low < sl
     ) {
       sl =
         orderBlock.low -
         atr * 0.05;
     }
 
-    return sl < entry
-      ? sl
-      : null;
-  }
-
-  let sl =
-    sweep
-      ? sweep.level +
-        atr * 0.10
-      : entry +
-        atr;
-
-  if (
-    orderBlock &&
-    orderBlock.high >
-      sl
-  ) {
+    if (sl >= entry) {
+      return null;
+    }
+  } else {
     sl =
-      orderBlock.high +
-      atr * 0.05;
+      sweep
+        ? sweep.level +
+          atr * 0.10
+        : entry + atr;
+
+    if (
+      orderBlock &&
+      orderBlock.high > sl
+    ) {
+      sl =
+        orderBlock.high +
+        atr * 0.05;
+    }
+
+    if (sl <= entry) {
+      return null;
+    }
   }
 
-  return sl > entry
-    ? sl
-    : null;
-}
-
-
-// ============================================================
-// OPPOSING LIQUIDITY
-// ============================================================
-
-function blockedByOpposingLiquidity(
-  candles,
-  direction,
-  takeProfit
-) {
-  const structure =
-    detectStructure(
-      candles
-    );
-
-  const currentPrice =
-    candles[
-      candles.length - 1
-    ].close;
-
-  if (
-    direction ===
-      "bullish"
-  ) {
-    return structure.highs
-      .slice(-5)
-      .some(
-        swing =>
-          swing.price >
-            currentPrice &&
-          swing.price <
-            takeProfit
-      );
-  }
-
-  return structure.lows
-    .slice(-5)
-    .some(
-      swing =>
-        swing.price <
-          currentPrice &&
-        swing.price >
-          takeProfit
-    );
+  return sl;
 }
 
 
@@ -3154,9 +2821,7 @@ function blockedByOpposingLiquidity(
 // SCORE
 // ============================================================
 
-function calculateScore(
-  x
-) {
+function calculateScore(x) {
   let score = 0;
 
   if (
@@ -3174,15 +2839,11 @@ function calculateScore(
     score += 2;
   }
 
-  if (
-    x.structureBreak
-  ) {
+  if (x.structureBreak) {
     score += 2;
   }
 
-  if (
-    x.displacement
-  ) {
+  if (x.displacement) {
     score += 2;
   }
 
@@ -3196,7 +2857,8 @@ function calculateScore(
 
   if (
     x.fib &&
-    x.pullback?.fibZone
+    x.pullback &&
+    x.pullback.fibZone
   ) {
     score += 1;
   }
@@ -3206,7 +2868,8 @@ function calculateScore(
   }
 
   if (
-    x.pullback?.valid
+    x.pullback &&
+    x.pullback.valid
   ) {
     score += 2;
   }
@@ -3216,114 +2879,527 @@ function calculateScore(
 
 
 // ============================================================
-// TELEGRAM AUTOMATIC SCANNER
+// PAYSTACK VERIFICATION
 // ============================================================
 
-async function runAutomaticScan(
+async function verifyPaystackPayment(
+  reference,
   env
 ) {
-  if (
-    !env.TELEGRAM_BOT_TOKEN ||
-    !env.DB
-  ) {
-    return;
-  }
-
-  try {
-    const signals =
-      await generateSignals();
-
-    const activeSignals =
-      signals.filter(
-        signal =>
-          signal.status !==
-          "NO SIGNAL"
-      );
-
-    if (
-      !activeSignals.length
-    ) {
-      console.log(
-        "CyberFX: no active signals"
-      );
-
-      return;
-    }
-
-    const subscribers =
-      await getTelegramSubscribers(
-        env
-      );
-
-    if (
-      !subscribers.length
-    ) {
-      console.log(
-        "CyberFX: no active Telegram subscribers"
-      );
-
-      return;
-    }
-
-    for (
-      const signal of
-      activeSignals
-    ) {
-      const message =
-        formatTelegramSignal(
-          signal
-        );
-
-      for (
-        const subscriber of
-        subscribers
-      ) {
-        await sendTelegramMessage(
-          subscriber.telegram_id,
-          message,
-          env.TELEGRAM_BOT_TOKEN
-        );
-      }
-    }
-
-  } catch (error) {
-    console.error(
-      "Automatic scan error:",
-      error
+  if (!env.PAYSTACK_SECRET_KEY) {
+    throw new Error(
+      "PAYSTACK_SECRET_KEY is missing"
     );
   }
+
+  if (!env.DB) {
+    throw new Error(
+      "D1 database binding DB is missing"
+    );
+  }
+
+  const response =
+    await fetch(
+      `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
+      {
+        headers: {
+          Authorization:
+            `Bearer ${env.PAYSTACK_SECRET_KEY}`
+        }
+      }
+    );
+
+  const result =
+    await response.json();
+
+  if (
+    !response.ok ||
+    !result.status ||
+    !result.data
+  ) {
+    return {
+      success: false,
+      payment_status:
+        "failed",
+      error:
+        result.message ||
+        "Unable to verify payment"
+    };
+  }
+
+  const transaction =
+    result.data;
+
+  if (
+    transaction.status !==
+    "success"
+  ) {
+    await env.DB.prepare(`
+      UPDATE payments
+      SET status = ?
+      WHERE reference = ?
+    `)
+      .bind(
+        transaction.status ||
+          "failed",
+        reference
+      )
+      .run();
+
+    return {
+      success: false,
+      payment_status:
+        transaction.status ||
+        "failed",
+      reference
+    };
+  }
+
+  const payment =
+    await env.DB.prepare(`
+      SELECT
+        reference,
+        amount,
+        plan,
+        status,
+        email
+      FROM payments
+      WHERE reference = ?
+      LIMIT 1
+    `)
+      .bind(reference)
+      .first();
+
+  if (!payment) {
+    return {
+      success: false,
+      payment_status:
+        "failed",
+      error:
+        "Payment record not found"
+    };
+  }
+
+  const plan =
+    payment.plan;
+
+  if (!PLANS[plan]) {
+    return {
+      success: false,
+      payment_status:
+        "failed",
+      error:
+        "Invalid CyberFX plan"
+    };
+  }
+
+  const selectedPlan =
+    PLANS[plan];
+
+  if (
+    Number(transaction.amount) !==
+    Number(selectedPlan.amount)
+  ) {
+    await env.DB.prepare(`
+      UPDATE payments
+      SET status = ?
+      WHERE reference = ?
+    `)
+      .bind(
+        "amount_mismatch",
+        reference
+      )
+      .run();
+
+    return {
+      success: false,
+      payment_status:
+        "amount_mismatch",
+      error:
+        "Payment amount does not match the selected plan"
+    };
+  }
+
+  const email =
+    String(
+      transaction.customer?.email ||
+      payment.email ||
+      ""
+    )
+      .trim()
+      .toLowerCase();
+
+  if (!email) {
+    return {
+      success: false,
+      payment_status:
+        "failed",
+      error:
+        "Customer email not found"
+    };
+  }
+
+  const now =
+    new Date();
+
+  // ----------------------------------------------------------
+  // Find user
+  // ----------------------------------------------------------
+
+  const user =
+    await env.DB.prepare(`
+      SELECT id, email
+      FROM users
+      WHERE email = ?
+      LIMIT 1
+    `)
+      .bind(email)
+      .first();
+
+  if (!user) {
+    return {
+      success: false,
+      payment_status:
+        "failed",
+      error:
+        "User account not found. Register on CyberFX before paying."
+    };
+  }
+
+  // ----------------------------------------------------------
+  // Existing subscription
+  // ----------------------------------------------------------
+
+  const existing =
+    await env.DB.prepare(`
+      SELECT
+        id,
+        starts_at,
+        expires_at,
+        status
+      FROM subscriptions
+      WHERE user_id = ?
+      ORDER BY id DESC
+      LIMIT 1
+    `)
+      .bind(user.id)
+      .first();
+
+  let startDate = now;
+
+  if (
+    existing?.expires_at
+  ) {
+    const expiry =
+      new Date(
+        existing.expires_at
+      );
+
+    if (
+      Number.isFinite(
+        expiry.getTime()
+      ) &&
+      expiry > now
+    ) {
+      startDate =
+        expiry;
+    }
+  }
+
+  const expires =
+    addMonths(
+      startDate,
+      selectedPlan.months
+    );
+
+  // ----------------------------------------------------------
+  // Payment
+  // ----------------------------------------------------------
+
+  await env.DB.prepare(`
+    UPDATE payments
+    SET
+      status = ?,
+      paid_at = ?
+    WHERE reference = ?
+  `)
+    .bind(
+      "success",
+      now.toISOString(),
+      reference
+    )
+    .run();
+
+  // ----------------------------------------------------------
+  // Subscription
+  // ----------------------------------------------------------
+
+  if (existing?.id) {
+    await env.DB.prepare(`
+      UPDATE subscriptions
+      SET
+        plan = ?,
+        paystack_reference = ?,
+        status = ?,
+        starts_at = ?,
+        expires_at = ?
+      WHERE id = ?
+    `)
+      .bind(
+        plan,
+        reference,
+        "active",
+        startDate.toISOString(),
+        expires.toISOString(),
+        existing.id
+      )
+      .run();
+  } else {
+    await env.DB.prepare(`
+      INSERT INTO subscriptions (
+        user_id,
+        plan,
+        paystack_reference,
+        status,
+        starts_at,
+        expires_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?)
+    `)
+      .bind(
+        user.id,
+        plan,
+        reference,
+        "active",
+        startDate.toISOString(),
+        expires.toISOString()
+      )
+      .run();
+  }
+
+  return {
+    success: true,
+    payment_status:
+      "success",
+    reference,
+    email,
+    plan,
+    plan_name:
+      selectedPlan.name,
+    starts_at:
+      startDate.toISOString(),
+    expires_at:
+      expires.toISOString()
+  };
 }
 
 
 // ============================================================
-// GET TELEGRAM SUBSCRIBERS
+// ACTIVE SUBSCRIPTION BY EMAIL
 // ============================================================
 
-async function getTelegramSubscribers(
+async function getActiveSubscriptionByEmail(
+  email,
   env
 ) {
-  const result =
+  if (!env.DB) {
+    return null;
+  }
+
+  const row =
     await env.DB.prepare(`
-      SELECT DISTINCT
-        tl.telegram_id,
-        tl.telegram_username,
+      SELECT
         u.email,
         s.plan,
-        s.expires_at
+        s.starts_at,
+        s.expires_at,
+        s.status
+      FROM users u
+      INNER JOIN subscriptions s
+        ON s.user_id = u.id
+      WHERE u.email = ?
+      ORDER BY s.id DESC
+      LIMIT 1
+    `)
+      .bind(email)
+      .first();
+
+  if (!row) {
+    return null;
+  }
+
+  const expiry =
+    new Date(
+      row.expires_at
+    );
+
+  if (
+    row.status !== "active" ||
+    !Number.isFinite(
+      expiry.getTime()
+    ) ||
+    expiry <= new Date()
+  ) {
+    await env.DB.prepare(`
+      UPDATE subscriptions
+      SET status = ?
+      WHERE user_id = (
+        SELECT id
+        FROM users
+        WHERE email = ?
+        LIMIT 1
+      )
+    `)
+      .bind(
+        "expired",
+        email
+      )
+      .run();
+
+    return null;
+  }
+
+  return {
+    email: row.email,
+    plan: row.plan,
+    plan_name:
+      PLANS[row.plan]?.name ||
+      row.plan,
+    starts_at:
+      row.starts_at,
+    expires_at:
+      row.expires_at
+  };
+}
+
+
+// ============================================================
+// TELEGRAM ACCESS
+// ============================================================
+
+async function isTelegramAuthorized(
+  telegramId,
+  env
+) {
+  const id =
+    String(telegramId);
+
+  // OWNER BYPASS
+  if (
+    id === OWNER_TELEGRAM_ID
+  ) {
+    return {
+      authorized: true,
+      owner: true
+    };
+  }
+
+  if (!env.DB) {
+    return {
+      authorized: false,
+      owner: false
+    };
+  }
+
+  const link =
+    await env.DB.prepare(`
+      SELECT
+        tl.user_id,
+        u.email
+      FROM telegram_links tl
+      INNER JOIN users u
+        ON u.id = tl.user_id
+      WHERE tl.telegram_id = ?
+      LIMIT 1
+    `)
+      .bind(id)
+      .first();
+
+  if (!link) {
+    return {
+      authorized: false,
+      owner: false
+    };
+  }
+
+  const subscription =
+    await getActiveSubscriptionByEmail(
+      link.email,
+      env
+    );
+
+  if (!subscription) {
+    return {
+      authorized: false,
+      owner: false
+    };
+  }
+
+  return {
+    authorized: true,
+    owner: false,
+    email: link.email,
+    plan:
+      subscription.plan
+  };
+}
+
+
+// ============================================================
+// GET AUTHORIZED TELEGRAM USERS
+// ============================================================
+
+async function getAuthorizedTelegramIds(
+  env
+) {
+  const ids =
+    new Set();
+
+  // OWNER
+  ids.add(
+    OWNER_TELEGRAM_ID
+  );
+
+  if (!env.DB) {
+    return [
+      ...ids
+    ];
+  }
+
+  const rows =
+    await env.DB.prepare(`
+      SELECT
+        tl.telegram_id,
+        u.email
       FROM telegram_links tl
       INNER JOIN users u
         ON u.id = tl.user_id
       INNER JOIN subscriptions s
         ON s.user_id = u.id
-      WHERE s.status = 'active'
-        AND s.expires_at > ?
+      WHERE
+        s.status = 'active'
+        AND datetime(s.expires_at) > datetime('now')
     `)
-      .bind(
-        new Date().toISOString()
-      )
       .all();
 
-  return result.results || [];
+  for (
+    const row of
+    rows.results || []
+  ) {
+    if (
+      row.telegram_id
+    ) {
+      ids.add(
+        String(
+          row.telegram_id
+        )
+      );
+    }
+  }
+
+  return [
+    ...ids
+  ];
 }
 
 
@@ -3333,94 +3409,141 @@ async function getTelegramSubscribers(
 
 async function handleTelegramMessage(
   message,
-  env
+  env,
+  origin
 ) {
   const chatId =
     message.chat?.id;
 
+  const telegramId =
+    message.from?.id ||
+    chatId;
+
   const text =
     String(
       message.text || ""
-    ).trim();
+    )
+      .trim()
+      .toLowerCase();
 
   if (!chatId) {
     return;
   }
 
-  // ==========================================================
+  // ----------------------------------------------------------
   // START
-  // ==========================================================
+  // ----------------------------------------------------------
 
   if (
     text === "/start"
   ) {
+    const access =
+      await isTelegramAuthorized(
+        telegramId,
+        env
+      );
+
+    if (access.owner) {
+      await sendTelegramMessage(
+        chatId,
+        `👑 CYBERFX OWNER
+
+You have owner access.
+
+Your account does not need a subscription or Telegram linking.
+
+📡 Automatic signals are enabled.
+
+Use /signals to request the current signal scan.`,
+        env.TELEGRAM_BOT_TOKEN
+      );
+
+      return;
+    }
+
+    if (access.authorized) {
+      await sendTelegramMessage(
+        chatId,
+        `🔥 CYBERFX
+
+Your subscription is active.
+
+📡 You will receive CyberFX signals automatically.
+
+Use /signals for the current scan.`,
+        env.TELEGRAM_BOT_TOKEN
+      );
+
+      return;
+    }
+
     await sendTelegramMessage(
       chatId,
+      `🔒 CYBERFX
 
-      `🔥 CYBERFX
+Access denied.
 
-Welcome.
+You need an active CyberFX subscription linked to this Telegram account before you can receive signals.
 
-This Telegram channel is subscriber-only.
+Subscribe through the CyberFX website:
 
-Markets:
-• XAU/USD
-• BTC/USD
-• NASDAQ
-• US OIL
+${WEBSITE_URL}
 
-Timeframes:
-• 15M
-• 30M
-• 1H
-• 4H
-
-Signal levels:
-🟢 BUY REJECTION
-🔴 SELL REJECTION
-🟡 VALID SETUP
-🔥 CONFIRMED
-
-Target RR: 1:3
-
-Subscribe on the CyberFX website and link your Telegram account to receive signals automatically.`,
-
+After registering and subscribing, link your Telegram account.`,
       env.TELEGRAM_BOT_TOKEN
     );
 
     return;
   }
 
-  // ==========================================================
-  // CHECK SUBSCRIPTION
-  // ==========================================================
+  // ----------------------------------------------------------
+  // SUBSCRIBE
+  // ----------------------------------------------------------
 
-  const subscriber =
-    await getActiveSubscriberByTelegramId(
+  if (
+    text === "/subscribe"
+  ) {
+    await sendTelegramMessage(
       chatId,
-      env
+      `🔥 CYBERFX SUBSCRIPTION
+
+Register and subscribe through the CyberFX website:
+
+${WEBSITE_URL}
+
+After payment, link your Telegram account to receive private signals.`,
+      env.TELEGRAM_BOT_TOKEN
     );
 
-  // ==========================================================
+    return;
+  }
+
+  // ----------------------------------------------------------
   // SIGNAL
-  // ==========================================================
+  // ----------------------------------------------------------
 
   if (
     text === "/signal" ||
     text === "/signals"
   ) {
-    if (!subscriber) {
+    const access =
+      await isTelegramAuthorized(
+        telegramId,
+        env
+      );
+
+    if (!access.authorized) {
       await sendTelegramMessage(
         chatId,
-
         `🔒 CYBERFX
 
 Access denied.
 
 You need an active CyberFX subscription linked to this Telegram account before you can receive signals.
 
-Subscribe through the CyberFX website, then link your Telegram account.`,
+Subscribe here:
 
+${WEBSITE_URL}`,
         env.TELEGRAM_BOT_TOKEN
       );
 
@@ -3431,23 +3554,19 @@ Subscribe through the CyberFX website, then link your Telegram account.`,
       const signals =
         await generateSignals();
 
-      const activeSignals =
+      const active =
         signals.filter(
           signal =>
             signal.status !==
             "NO SIGNAL"
         );
 
-      if (
-        !activeSignals.length
-      ) {
+      if (!active.length) {
         await sendTelegramMessage(
           chatId,
-
           `CYBERFX
 
 No active rejection, valid setup, or confirmed signal at the moment.`,
-
           env.TELEGRAM_BOT_TOKEN
         );
 
@@ -3455,16 +3574,13 @@ No active rejection, valid setup, or confirmed signal at the moment.`,
       }
 
       for (
-        const signal of
-        activeSignals
+        const signal of active
       ) {
         await sendTelegramMessage(
           chatId,
-
           formatTelegramSignal(
             signal
           ),
-
           env.TELEGRAM_BOT_TOKEN
         );
       }
@@ -3477,11 +3593,9 @@ No active rejection, valid setup, or confirmed signal at the moment.`,
 
       await sendTelegramMessage(
         chatId,
-
         `CYBERFX
 
 Signal engine temporarily unavailable.`,
-
         env.TELEGRAM_BOT_TOKEN
       );
     }
@@ -3489,69 +3603,97 @@ Signal engine temporarily unavailable.`,
     return;
   }
 
-  // ==========================================================
-  // SUBSCRIBE COMMAND
-  // ==========================================================
+  // ----------------------------------------------------------
+  // HELP
+  // ----------------------------------------------------------
 
   if (
-    text === "/subscribe"
+    text === "/help"
   ) {
     await sendTelegramMessage(
       chatId,
+      `🔥 CYBERFX
 
-      `💳 CYBERFX SUBSCRIPTION
+Commands:
 
-To receive private CyberFX signals:
+/start — Check access
+/signals — Get current signals
+/subscribe — Subscription website
+/help — Show commands
 
-1. Open the CyberFX website.
-2. Create/login to your account.
-3. Choose your subscription plan.
-4. Complete payment.
-5. Link this Telegram account.
-
-After your active subscription is linked, signals will automatically be sent here.`,
-
+Subscribed users receive signals automatically.`,
       env.TELEGRAM_BOT_TOKEN
     );
 
     return;
   }
+}
 
-  // ==========================================================
-  // STATUS
-  // ==========================================================
 
-  if (
-    text === "/status"
-  ) {
-    if (!subscriber) {
-      await sendTelegramMessage(
-        chatId,
+// ============================================================
+// AUTOMATIC SCAN
+// ============================================================
 
-        `🔒 Subscription status: INACTIVE
+async function runAutomaticScan(
+  env
+) {
+  if (!env.TELEGRAM_BOT_TOKEN) {
+    console.error(
+      "TELEGRAM_BOT_TOKEN is missing"
+    );
 
-No active subscription is linked to this Telegram account.`,
+    return;
+  }
 
-        env.TELEGRAM_BOT_TOKEN
+  try {
+    const signals =
+      await generateSignals();
+
+    const active =
+      signals.filter(
+        signal =>
+          signal.status !==
+          "NO SIGNAL"
+      );
+
+    if (!active.length) {
+      console.log(
+        "CYBERFX: No active signals."
       );
 
       return;
     }
 
-    await sendTelegramMessage(
-      chatId,
+    const recipients =
+      await getAuthorizedTelegramIds(
+        env
+      );
 
-      `🟢 CYBERFX ACCESS ACTIVE
-
-Plan: ${subscriber.plan}
-
-Expires:
-${subscriber.expires_at}`,
-
-      env.TELEGRAM_BOT_TOKEN
+    console.log(
+      `CYBERFX: Sending ${active.length} signal(s) to ${recipients.length} authorized Telegram account(s).`
     );
 
-    return;
+    for (
+      const chatId of recipients
+    ) {
+      for (
+        const signal of active
+      ) {
+        await sendTelegramMessage(
+          chatId,
+          formatTelegramSignal(
+            signal
+          ),
+          env.TELEGRAM_BOT_TOKEN
+        );
+      }
+    }
+
+  } catch (error) {
+    console.error(
+      "Automatic scan error:",
+      error
+    );
   }
 }
 
@@ -3573,19 +3715,15 @@ function formatTelegramSignal(
         ? "🟢"
         : "🔴";
 
-    return `${icon} ${signal.direction} REJECTION
-
-CYBERFX
+    return `${icon} CYBERFX ${signal.direction} REJECTION
 
 ${signal.instrument}
 
 Entry TF: ${signal.entryTF}
 
-Rejection Level:
-${signal.rejectionLevel}
+Rejection Level: ${signal.rejectionLevel}
 
-Current Price:
-${signal.price}
+Current Price: ${signal.price}
 
 ${signal.message}
 
@@ -3600,20 +3738,15 @@ ${signal.message}
 
 ${signal.instrument} — ${signal.direction}
 
-Entry TF:
-${signal.entryTF}
+Entry TF: ${signal.entryTF}
 
-Entry:
-${signal.entry}
+Entry: ${signal.entry}
 
-Stop Loss:
-${signal.stopLoss}
+Stop Loss: ${signal.stopLoss}
 
-Take Profit:
-${signal.takeProfit}
+Take Profit: ${signal.takeProfit}
 
-Risk/Reward:
-1:3
+Risk/Reward: 1:3
 
 Setup:
 ${
@@ -3637,35 +3770,29 @@ ${
 
 ${signal.instrument} — ${signal.direction}
 
-Entry TF:
-${signal.entryTF}
+Entry TF: ${signal.entryTF}
 
-Entry:
-${signal.entry}
+Entry: ${signal.entry}
 
-Stop Loss:
-${signal.stopLoss}
+Stop Loss: ${signal.stopLoss}
 
-Take Profit:
-${signal.takeProfit}
+Take Profit: ${signal.takeProfit}
 
-Risk/Reward:
-1:3
+Risk/Reward: 1:3
 
-🔥 CONFIRMED`;
+✅ CONFIRMED`;
   }
 
   return `CYBERFX
 
 ${signal.instrument}
 
-Status:
-${signal.status}`;
+Status: ${signal.status}`;
 }
 
 
 // ============================================================
-// TELEGRAM SEND
+// TELEGRAM API
 // ============================================================
 
 async function sendTelegramMessage(
@@ -3702,7 +3829,7 @@ async function sendTelegramMessage(
 
   if (!result.ok) {
     console.error(
-      "Telegram send error:",
+      "Telegram sendMessage failed:",
       result
     );
   }
@@ -3724,8 +3851,7 @@ function average(
 
   return (
     values.reduce(
-      (a, b) =>
-        a + b,
+      (a, b) => a + b,
       0
     ) /
     values.length
@@ -3737,9 +3863,7 @@ function midpoint(
   a,
   b
 ) {
-  return (
-    a + b
-  ) / 2;
+  return (a + b) / 2;
 }
 
 
@@ -3752,10 +3876,8 @@ function priceInside(
   }
 
   return (
-    price >=
-      zone.low &&
-    price <=
-      zone.high
+    price >= zone.low &&
+    price <= zone.high
   );
 }
 
@@ -3764,9 +3886,7 @@ function roundPrice(
   price
 ) {
   if (
-    !Number.isFinite(
-      price
-    )
+    !Number.isFinite(price)
   ) {
     return null;
   }
@@ -3794,6 +3914,43 @@ function formatTF(
 }
 
 
+function addMonths(
+  date,
+  months
+) {
+  const result =
+    new Date(date);
+
+  const originalDay =
+    result.getUTCDate();
+
+  result.setUTCDate(1);
+
+  result.setUTCMonth(
+    result.getUTCMonth() +
+      months
+  );
+
+  const lastDay =
+    new Date(
+      Date.UTC(
+        result.getUTCFullYear(),
+        result.getUTCMonth() + 1,
+        0
+      )
+    ).getUTCDate();
+
+  result.setUTCDate(
+    Math.min(
+      originalDay,
+      lastDay
+    )
+  );
+
+  return result;
+}
+
+
 // ============================================================
 // JSON
 // ============================================================
@@ -3803,9 +3960,7 @@ function json(
   status = 200
 ) {
   return new Response(
-    JSON.stringify(
-      data
-    ),
+    JSON.stringify(data),
     {
       status,
 
@@ -3819,14 +3974,3 @@ function json(
     }
   );
 }
-
-
-// ============================================================
-// SIGNAL PRIORITY
-// ============================================================
-
-const SIGNAL_PRIORITY = {
-  "REJECTION": 1,
-  "VALID SETUP": 2,
-  "CONFIRMED": 3
-};
