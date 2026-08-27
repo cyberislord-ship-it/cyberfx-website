@@ -10,7 +10,8 @@ export default {
         success: true,
         engine: "CyberFX",
         status: "online",
-        api_key_connected: !!env.TWELVE_DATA_API_KEY,
+        market_data: "Biquote",
+        biquote_connected: true,
         telegram_connected: !!env.TELEGRAM_BOT_TOKEN,
         paystack_connected: !!env.PAYSTACK_SECRET_KEY,
         database_connected: !!env.DB
@@ -180,13 +181,6 @@ export default {
       request.method === "GET"
     ) {
       try {
-        if (!env.PAYSTACK_SECRET_KEY) {
-          return json({
-            success: false,
-            error: "PAYSTACK_SECRET_KEY is missing"
-          }, 500);
-        }
-
         const reference =
           url.searchParams.get("reference");
 
@@ -197,13 +191,13 @@ export default {
           }, 400);
         }
 
-        const verification =
+        const result =
           await verifyPaystackPayment(
             reference,
             env
           );
 
-        return json(verification);
+        return json(result);
 
       } catch (error) {
         console.error(
@@ -351,19 +345,12 @@ export default {
     // =========================================================
     if (url.pathname === "/api/signals") {
       try {
-        if (!env.TWELVE_DATA_API_KEY) {
-          return json({
-            success: false,
-            error: "TWELVE_DATA_API_KEY is missing"
-          }, 500);
-        }
-
         const data =
-          await loadAllMarkets(env);
+          await loadAllMarkets();
 
         return json({
           success: true,
-          source: "Twelve Data",
+          source: "Biquote",
           engine: "CyberFX",
           markets: Object.keys(INSTRUMENTS),
           timeframes:
@@ -380,6 +367,7 @@ export default {
         return json({
           success: false,
           engine: "CyberFX",
+          source: "Biquote",
           error:
             error?.message ||
             String(error)
@@ -395,11 +383,12 @@ export default {
     ) {
       try {
         const result =
-          await generateSignals(env);
+          await generateSignals();
 
         return json({
           success: true,
           engine: "CyberFX",
+          source: "Biquote",
           risk_reward: "1:3",
           signal_levels: [
             "REJECTION",
@@ -505,6 +494,61 @@ const PLANS = {
     amount: 12000000
   }
 };
+
+
+// ============================================================
+// BIQUOTE MARKETS
+// ============================================================
+
+const INSTRUMENTS = {
+  "XAU/USD": "XAUUSD",
+  "BTC/USD": "BTCUSD",
+  "NASDAQ": "USTEC",
+  "US OIL": "USOIL"
+};
+
+
+// ============================================================
+// TIMEFRAMES
+// ============================================================
+
+const TIMEFRAMES = [
+  {
+    name: "4h",
+    interval: "4h"
+  },
+  {
+    name: "1h",
+    interval: "1h"
+  },
+  {
+    name: "30min",
+    interval: "30m"
+  },
+  {
+    name: "15min",
+    interval: "15m"
+  }
+];
+
+
+// ============================================================
+// ENTRY TIMEFRAMES
+// ============================================================
+
+const ENTRY_TIMEFRAMES = [
+  "15min",
+  "30min",
+  "1h",
+  "4h"
+];
+
+
+// ============================================================
+// CONFIRMED SCORE
+// ============================================================
+
+const CONFIRMED_SCORE = 10;
 
 
 // ============================================================
@@ -890,75 +934,10 @@ function addMonths(
 
 
 // ============================================================
-// CYBERFX MARKETS
+// LOAD ALL BIQUOTE MARKETS
 // ============================================================
 
-const INSTRUMENTS = {
-  "XAU/USD": "XAU/USD",
-  "BTC/USD": "BTC/USD",
-  "NASDAQ": "NDX",
-  "US OIL": "WTI"
-};
-
-
-// ============================================================
-// TIMEFRAMES
-// ============================================================
-
-const TIMEFRAMES = [
-  {
-    name: "1day",
-    interval: "1day"
-  },
-  {
-    name: "4h",
-    interval: "4h"
-  },
-  {
-    name: "1h",
-    interval: "1h"
-  },
-  {
-    name: "30min",
-    interval: "30min"
-  },
-  {
-    name: "15min",
-    interval: "15min"
-  }
-];
-
-
-// ============================================================
-// ENTRY TIMEFRAMES
-// ============================================================
-
-const ENTRY_TIMEFRAMES = [
-  "15min",
-  "30min",
-  "1h",
-  "4h"
-];
-
-
-// ============================================================
-// CONFIRMATION
-// ============================================================
-
-const CONFIRMED_SCORE = 13;
-
-
-// ============================================================
-// LOAD ALL MARKETS
-// ============================================================
-
-async function loadAllMarkets(env) {
-  if (!env.TWELVE_DATA_API_KEY) {
-    throw new Error(
-      "TWELVE_DATA_API_KEY is missing"
-    );
-  }
-
+async function loadAllMarkets() {
   const data = {};
 
   for (
@@ -973,8 +952,7 @@ async function loadAllMarkets(env) {
       data[name][tf.name] =
         await getCandles(
           symbol,
-          tf.interval,
-          env.TWELVE_DATA_API_KEY
+          tf.interval
         );
     }
   }
@@ -984,23 +962,17 @@ async function loadAllMarkets(env) {
 
 
 // ============================================================
-// TWELVE DATA
+// BIQUOTE OHLC
 // ============================================================
 
 async function getCandles(
   symbol,
-  interval,
-  apiKey
+  interval
 ) {
   const apiUrl =
     new URL(
-      "https://api.twelvedata.com/time_series"
+      `https://biquote.io/api/${encodeURIComponent(symbol)}/ohlc`
     );
-
-  apiUrl.searchParams.set(
-    "symbol",
-    symbol
-  );
 
   apiUrl.searchParams.set(
     "interval",
@@ -1008,45 +980,45 @@ async function getCandles(
   );
 
   apiUrl.searchParams.set(
-    "outputsize",
-    "100"
-  );
-
-  apiUrl.searchParams.set(
-    "apikey",
-    apiKey
+    "limit",
+    "200"
   );
 
   try {
     const response =
-      await fetch(apiUrl);
+      await fetch(apiUrl, {
+        headers: {
+          "Accept":
+            "application/json"
+        }
+      });
 
     const result =
       await response.json();
 
     if (
       !response.ok ||
-      result.status === "error"
+      !Array.isArray(result.bars)
     ) {
       return {
         status: "error",
-        code:
-          result.code ||
-          response.status,
+        code: response.status,
         message:
-          result.message ||
-          "Twelve Data request failed"
+          result?.message ||
+          result?.error ||
+          "Biquote request failed"
       };
     }
 
     return {
       status: "success",
+      source: "Biquote",
       symbol:
-        result.meta?.symbol ||
+        result.symbol ||
         symbol,
       interval,
       candles:
-        result.values || []
+        result.bars
     };
 
   } catch (error) {
@@ -1064,9 +1036,9 @@ async function getCandles(
 // MAIN SIGNAL ENGINE
 // ============================================================
 
-async function generateSignals(env) {
+async function generateSignals() {
   const marketData =
-    await loadAllMarkets(env);
+    await loadAllMarkets();
 
   const results = [];
 
@@ -1120,17 +1092,11 @@ async function generateSignals(env) {
       "15min": 1
     };
 
-    const signalPriority = {
-      "REJECTION": 1,
-      "VALID SETUP": 2,
-      "CONFIRMED": 3
-    };
-
     candidates.sort(
       (a, b) => {
         const quality =
-          signalPriority[b.status] -
-          signalPriority[a.status];
+          SIGNAL_PRIORITY[b.status] -
+          SIGNAL_PRIORITY[a.status];
 
         if (quality !== 0) {
           return quality;
@@ -1179,7 +1145,9 @@ function analyzeInstrument(
     );
 
   const closed =
-    candles.slice(0, -1);
+    candles.filter(
+      c => !c.isOpen
+    );
 
   if (closed.length < 30) {
     return null;
@@ -1195,7 +1163,7 @@ function analyzeInstrument(
     detectStructure(closed);
 
   // ==========================================================
-  // STAGE 1 — REJECTION
+  // REJECTION
   // ==========================================================
 
   const rejection =
@@ -1239,7 +1207,7 @@ function analyzeInstrument(
     );
 
   // ==========================================================
-  // LIQUIDITY
+  // OPTIONAL LIQUIDITY SWEEP
   // ==========================================================
 
   const sweep =
@@ -1266,24 +1234,14 @@ function analyzeInstrument(
   }
 
   // ==========================================================
-  // DISPLACEMENT
-  // ==========================================================
-
-  const displacement =
-    detectDisplacement(
-      closed,
-      sweep
-    );
-
-  // ==========================================================
-  // BOS / MSS
+  // STRUCTURE BREAK
   // ==========================================================
 
   const structureBreak =
     detectBOSMSS(
       closed,
       structure,
-      displacement
+      direction
     );
 
   // ==========================================================
@@ -1292,13 +1250,11 @@ function analyzeInstrument(
 
   const validSetup =
     detectValidSetup(
-      closed,
       direction,
       htfBias,
       rejection,
       crt,
       sweep,
-      displacement,
       structureBreak,
       structure
     );
@@ -1313,7 +1269,6 @@ function analyzeInstrument(
         sweep,
         structure,
         crt,
-        displacement,
         structureBreak,
         rejection,
         htfBias
@@ -1333,13 +1288,10 @@ function analyzeInstrument(
   }
 
   // ==========================================================
-  // FULL CONFIRMATION
+  // CONFIRMED
   // ==========================================================
 
   if (
-    !crt ||
-    !sweep ||
-    !displacement ||
     !structureBreak
   ) {
     return bestResult;
@@ -1366,33 +1318,37 @@ function analyzeInstrument(
   const fib =
     calculateFib(
       impulse,
-      structureBreak.direction
+      direction
     );
 
   const orderBlock =
     findOrderBlock(
       closed,
-      displacement,
+      direction,
       structureBreak
     );
+
+  // ==========================================================
+  // FIB + OB
+  // ==========================================================
+
+  if (!fib || !orderBlock) {
+    return bestResult;
+  }
 
   const fvg =
     findFVG(
       closed,
-      displacement
+      direction
     );
-
-  const currentPrice =
-    current.close;
 
   const pullback =
     validatePullback(
       closed,
-      impulse,
       fib,
       orderBlock,
       fvg,
-      structureBreak.direction
+      direction
     );
 
   if (!pullback.valid) {
@@ -1401,11 +1357,11 @@ function analyzeInstrument(
 
   const entry =
     determineEntry(
-      currentPrice,
+      current.close,
       fib,
       orderBlock,
       fvg,
-      structureBreak.direction
+      direction
     );
 
   if (!entry) {
@@ -1415,7 +1371,7 @@ function analyzeInstrument(
   const stopLoss =
     determineStopLoss(
       entry,
-      structureBreak.direction,
+      direction,
       sweep,
       orderBlock,
       closed
@@ -1426,7 +1382,7 @@ function analyzeInstrument(
   }
 
   const risk =
-    structureBreak.direction === "bullish"
+    direction === "bullish"
       ? entry - stopLoss
       : stopLoss - entry;
 
@@ -1434,12 +1390,8 @@ function analyzeInstrument(
     return bestResult;
   }
 
-  // ==========================================================
-  // 1:3 RR
-  // ==========================================================
-
   const takeProfit =
-    structureBreak.direction === "bullish"
+    direction === "bullish"
       ? entry + risk * 3
       : entry - risk * 3;
 
@@ -1449,19 +1401,15 @@ function analyzeInstrument(
       crt,
       sweep,
       structureBreak,
-      displacement,
       orderBlock,
       fvg,
       fib,
-      accumulation,
       pullback
     });
 
   const mandatoryPassed =
-    !!structure &&
-    !!sweep &&
     !!structureBreak &&
-    !!displacement &&
+    !!orderBlock &&
     !!pullback.valid &&
     risk > 0;
 
@@ -1473,11 +1421,23 @@ function analyzeInstrument(
     return bestResult;
   }
 
+  const reason =
+    buildTradeReason({
+      instrument,
+      direction,
+      currentPrice: current.close,
+      entry,
+      fib,
+      orderBlock,
+      sweep,
+      structureBreak
+    });
+
   return {
     instrument,
 
     direction:
-      structureBreak.direction === "bullish"
+      direction === "bullish"
         ? "BUY"
         : "SELL",
 
@@ -1501,18 +1461,18 @@ function analyzeInstrument(
     status: "CONFIRMED",
 
     label:
-      structureBreak.direction === "bullish"
-        ? "🔥 CONFIRMED BUY"
-        : "🔥 CONFIRMED SELL",
+      direction === "bullish"
+        ? "🔥 CYBERFX CONFIRMED BUY"
+        : "🔥 CYBERFX CONFIRMED SELL",
+
+    reason,
 
     internal: {
       score,
       htfBias,
-      accumulation,
       crt,
       sweep,
       structureBreak,
-      displacement,
       orderBlock,
       fvg,
       fib,
@@ -1582,13 +1542,13 @@ function detectRejection(
     return null;
   }
 
-  // ==========================================================
   // BUY REJECTION
-  // ==========================================================
-
   if (
     lowerWick >=
-      Math.max(body * 1.25, range * 0.30) &&
+      Math.max(
+        body * 1.25,
+        range * 0.30
+      ) &&
     closeLocation >= 0.60
   ) {
     const level =
@@ -1611,22 +1571,21 @@ function detectRejection(
         type: "BUY REJECTION",
         level,
         candle: current,
-        wick: lowerWick,
         reason:
           nearSwingLow
-            ? "Swing low rejection"
-            : "Strong lower-wick rejection"
+            ? "Price rejected a recent swing low."
+            : "Price showed strong lower-wick rejection."
       };
     }
   }
 
-  // ==========================================================
   // SELL REJECTION
-  // ==========================================================
-
   if (
     upperWick >=
-      Math.max(body * 1.25, range * 0.30) &&
+      Math.max(
+        body * 1.25,
+        range * 0.30
+      ) &&
     closeLocation <= 0.40
   ) {
     const level =
@@ -1649,11 +1608,10 @@ function detectRejection(
         type: "SELL REJECTION",
         level,
         candle: current,
-        wick: upperWick,
         reason:
           nearSwingHigh
-            ? "Swing high rejection"
-            : "Strong upper-wick rejection"
+            ? "Price rejected a recent swing high."
+            : "Price showed strong upper-wick rejection."
       };
     }
   }
@@ -1711,13 +1669,11 @@ function determineDevelopingDirection(
 // ============================================================
 
 function detectValidSetup(
-  candles,
   direction,
   htfBias,
   rejection,
   crt,
   sweep,
-  displacement,
   structureBreak,
   structure
 ) {
@@ -1738,16 +1694,10 @@ function detectValidSetup(
     score += 1;
   }
 
+  // Sweep is optional.
   if (
     sweep &&
     sweep.direction === direction
-  ) {
-    score += 3;
-  }
-
-  if (
-    displacement &&
-    displacement.direction === direction
   ) {
     score += 2;
   }
@@ -1766,7 +1716,7 @@ function detectValidSetup(
     score += 1;
   }
 
-  return score >= 5;
+  return score >= 4;
 }
 
 
@@ -1814,13 +1764,13 @@ function buildRejectionSignal(
         current.close
       ),
 
-    rejectionReason:
+    reason:
       rejection.reason,
 
     message:
       direction === "BUY"
-        ? "Price rejected the level and closed back above it."
-        : "Price rejected the level and closed back below it.",
+        ? "Price is rejecting the level. Watch for a retracement before considering an entry."
+        : "Price is rejecting the level. Watch for a retracement before considering an entry.",
 
     internal: {
       htfBias,
@@ -1842,13 +1792,19 @@ function buildValidSetupSignal(
   sweep,
   structure,
   crt,
-  displacement,
   structureBreak,
   rejection,
   htfBias
 ) {
   const current =
     candles[candles.length - 1];
+
+  const atr =
+    ATR(candles);
+
+  if (!atr) {
+    return null;
+  }
 
   let entry =
     current.close;
@@ -1861,13 +1817,6 @@ function buildValidSetupSignal(
   if (sweep?.level) {
     entry =
       sweep.level;
-  }
-
-  const atr =
-    ATR(candles);
-
-  if (!atr) {
-    return null;
   }
 
   let stopLoss;
@@ -1900,40 +1849,17 @@ function buildValidSetupSignal(
       ? entry + risk * 3
       : entry - risk * 3;
 
-  const components = [];
-
-  if (htfBias === direction) {
-    components.push("HTF Bias");
-  }
-
-  if (
-    structure?.direction ===
-    direction
-  ) {
-    components.push("Structure");
-  }
-
-  if (rejection) {
-    components.push("Rejection");
-  }
-
-  if (sweep) {
-    components.push("Liquidity Sweep");
-  }
-
-  if (displacement) {
-    components.push("Displacement");
-  }
-
-  if (structureBreak) {
-    components.push(
-      structureBreak.type
-    );
-  }
-
-  if (crt) {
-    components.push("CRT");
-  }
+  const reason =
+    buildDevelopingReason({
+      instrument,
+      direction,
+      currentPrice: current.close,
+      entry,
+      rejection,
+      sweep,
+      structureBreak,
+      structure
+    });
 
   return {
     instrument,
@@ -1964,16 +1890,15 @@ function buildValidSetupSignal(
 
     label:
       direction === "bullish"
-        ? "🟡 VALID BUY SETUP"
-        : "🟡 VALID SELL SETUP",
+        ? "🟡 CYBERFX VALID BUY"
+        : "🟡 CYBERFX VALID SELL",
 
-    components,
+    reason,
 
     internal: {
       htfBias,
       crt,
       sweep,
-      displacement,
       structureBreak,
       rejection
     }
@@ -1990,11 +1915,25 @@ function normalizeCandles(
 ) {
   return values
     .map(c => ({
-      time: c.datetime,
-      open: Number(c.open),
-      high: Number(c.high),
-      low: Number(c.low),
-      close: Number(c.close)
+      time:
+        c.openTime ||
+        c.datetime ||
+        c.time,
+
+      open:
+        Number(c.open),
+
+      high:
+        Number(c.high),
+
+      low:
+        Number(c.low),
+
+      close:
+        Number(c.close),
+
+      isOpen:
+        !!c.isOpen
     }))
     .filter(c =>
       Number.isFinite(c.open) &&
@@ -2166,14 +2105,14 @@ function detectStructure(
 
 
 // ============================================================
-// HIGHER TIMEFRAME BIAS
+// HIGHER-TIMEFRAME BIAS
+// 4H + 1H ONLY
 // ============================================================
 
 function determineHTFBias(
   market
 ) {
   const frames = [
-    "1day",
     "4h",
     "1h"
   ];
@@ -2197,7 +2136,9 @@ function determineHTFBias(
     const candles =
       normalizeCandles(
         data.candles
-      ).slice(0, -1);
+      ).filter(
+        c => !c.isOpen
+      );
 
     if (candles.length < 30) {
       continue;
@@ -2209,13 +2150,15 @@ function determineHTFBias(
       );
 
     if (
-      structure.direction === "bullish"
+      structure.direction ===
+      "bullish"
     ) {
       bullish++;
     }
 
     if (
-      structure.direction === "bearish"
+      structure.direction ===
+      "bearish"
     ) {
       bearish++;
     }
@@ -2369,7 +2312,7 @@ function detectCRT(
 
 
 // ============================================================
-// LIQUIDITY SWEEP
+// OPTIONAL LIQUIDITY SWEEP
 // ============================================================
 
 function detectLiquiditySweep(
@@ -2377,10 +2320,6 @@ function detectLiquiditySweep(
   crt,
   structure
 ) {
-  if (!crt) {
-    return null;
-  }
-
   const current =
     candles[
       candles.length - 1
@@ -2391,6 +2330,7 @@ function detectLiquiditySweep(
   }
 
   if (
+    crt &&
     current.low < crt.low &&
     current.close > crt.low
   ) {
@@ -2402,6 +2342,7 @@ function detectLiquiditySweep(
   }
 
   if (
+    crt &&
     current.high > crt.high &&
     current.close < crt.high
   ) {
@@ -2413,8 +2354,7 @@ function detectLiquiditySweep(
   }
 
   if (
-    structure &&
-    structure.lows.length
+    structure?.lows?.length
   ) {
     const swingLow =
       structure.lows[
@@ -2437,8 +2377,7 @@ function detectLiquiditySweep(
   }
 
   if (
-    structure &&
-    structure.highs.length
+    structure?.highs?.length
   ) {
     const swingHigh =
       structure.highs[
@@ -2465,132 +2404,15 @@ function detectLiquiditySweep(
 
 
 // ============================================================
-// DISPLACEMENT
-// ============================================================
-
-function detectDisplacement(
-  candles,
-  sweep
-) {
-  if (!sweep) {
-    return null;
-  }
-
-  const current =
-    candles[
-      candles.length - 1
-    ];
-
-  const previous10 =
-    candles.slice(-11, -1);
-
-  if (
-    previous10.length < 10
-  ) {
-    return null;
-  }
-
-  const averageBody =
-    average(
-      previous10.map(
-        c =>
-          Math.abs(
-            c.close -
-            c.open
-          )
-      )
-    );
-
-  const body =
-    Math.abs(
-      current.close -
-      current.open
-    );
-
-  const range =
-    current.high -
-    current.low;
-
-  if (!range) {
-    return null;
-  }
-
-  const bodyRatio =
-    body / range;
-
-  const closeLocation =
-    (current.close -
-      current.low) /
-    range;
-
-  const bullish =
-    current.close >
-    current.open;
-
-  const bearish =
-    current.close <
-    current.open;
-
-  const bullishExtreme =
-    closeLocation >= 0.75;
-
-  const bearishExtreme =
-    closeLocation <= 0.25;
-
-  const validBody =
-    body >=
-    averageBody * 1.5;
-
-  const validRange =
-    bodyRatio >= 0.60;
-
-  if (
-    sweep.direction === "bullish" &&
-    bullish &&
-    bullishExtreme &&
-    validBody &&
-    validRange
-  ) {
-    return {
-      direction: "bullish",
-      candle: current,
-      body,
-      range
-    };
-  }
-
-  if (
-    sweep.direction === "bearish" &&
-    bearish &&
-    bearishExtreme &&
-    validBody &&
-    validRange
-  ) {
-    return {
-      direction: "bearish",
-      candle: current,
-      body,
-      range
-    };
-  }
-
-  return null;
-}
-
-
-// ============================================================
 // BOS / MSS
 // ============================================================
 
 function detectBOSMSS(
   candles,
   structure,
-  displacement
+  direction
 ) {
-  if (
-    !structure ||
-    !displacement
-  ) {
+  if (!structure) {
     return null;
   }
 
@@ -2599,9 +2421,12 @@ function detectBOSMSS(
       candles.length - 1
     ];
 
+  if (!current) {
+    return null;
+  }
+
   if (
-    displacement.direction ===
-    "bullish"
+    direction === "bullish"
   ) {
     const previousHigh =
       structure.highs[
@@ -2629,8 +2454,7 @@ function detectBOSMSS(
   }
 
   if (
-    displacement.direction ===
-    "bearish"
+    direction === "bearish"
   ) {
     const previousLow =
       structure.lows[
@@ -2670,10 +2494,7 @@ function getImpulseLeg(
   structureBreak,
   sweep
 ) {
-  if (
-    !structureBreak ||
-    !sweep
-  ) {
+  if (!structureBreak) {
     return null;
   }
 
@@ -2681,17 +2502,25 @@ function getImpulseLeg(
     structureBreak.direction ===
     "bullish"
   ) {
+    const low =
+      sweep?.level ||
+      findRecentLow(candles);
+
     return {
       direction: "bullish",
-      low: sweep.level,
+      low,
       high:
         structureBreak.level
     };
   }
 
+  const high =
+    sweep?.level ||
+    findRecentHigh(candles);
+
   return {
     direction: "bearish",
-    high: sweep.level,
+    high,
     low:
       structureBreak.level
   };
@@ -2699,7 +2528,7 @@ function getImpulseLeg(
 
 
 // ============================================================
-// FIBONACCI
+// FIBONACCI RETRACEMENT
 // ============================================================
 
 function calculateFib(
@@ -2761,37 +2590,38 @@ function calculateFib(
 
 function findOrderBlock(
   candles,
-  displacement,
+  direction,
   structureBreak
 ) {
-  if (
-    !displacement ||
-    !structureBreak
-  ) {
+  if (!structureBreak) {
     return null;
   }
 
-  const displacementIndex =
+  const breakIndex =
     candles.findIndex(
       c =>
-        c.time ===
-        displacement.candle.time
+        (
+          direction === "bullish"
+            ? c.close >
+              structureBreak.level
+            : c.close <
+              structureBreak.level
+        )
     );
 
-  if (
-    displacementIndex <= 0
-  ) {
-    return null;
-  }
+  const start =
+    breakIndex > 0
+      ? breakIndex - 1
+      : candles.length - 2;
 
   for (
     let i =
-      displacementIndex - 1;
+      start;
 
     i >=
       Math.max(
         0,
-        displacementIndex - 5
+        start - 8
       );
 
     i--
@@ -2800,8 +2630,7 @@ function findOrderBlock(
       candles[i];
 
     if (
-      structureBreak.direction ===
-        "bullish" &&
+      direction === "bullish" &&
       candle.close <
         candle.open
     ) {
@@ -2817,8 +2646,7 @@ function findOrderBlock(
     }
 
     if (
-      structureBreak.direction ===
-        "bearish" &&
+      direction === "bearish" &&
       candle.close >
         candle.open
     ) {
@@ -2844,22 +2672,16 @@ function findOrderBlock(
 
 function findFVG(
   candles,
-  displacement
+  direction
 ) {
-  if (!displacement) {
+  if (
+    candles.length < 3
+  ) {
     return null;
   }
 
   const i =
-    candles.findIndex(
-      c =>
-        c.time ===
-        displacement.candle.time
-    );
-
-  if (i < 2) {
-    return null;
-  }
+    candles.length - 1;
 
   const c1 =
     candles[i - 2];
@@ -2868,8 +2690,7 @@ function findFVG(
     candles[i];
 
   if (
-    displacement.direction ===
-      "bullish" &&
+    direction === "bullish" &&
     c1.high < c3.low
   ) {
     return {
@@ -2880,8 +2701,7 @@ function findFVG(
   }
 
   if (
-    displacement.direction ===
-      "bearish" &&
+    direction === "bearish" &&
     c1.low > c3.high
   ) {
     return {
@@ -2901,7 +2721,6 @@ function findFVG(
 
 function validatePullback(
   candles,
-  impulse,
   fib,
   orderBlock,
   fvg,
@@ -2909,7 +2728,7 @@ function validatePullback(
 ) {
   if (
     !fib ||
-    !impulse
+    !orderBlock
   ) {
     return {
       valid: false
@@ -2924,36 +2743,31 @@ function validatePullback(
   const price =
     current.close;
 
-  let fibZone = false;
+  let fibRetracement = false;
 
   if (
     direction === "bullish"
   ) {
-    fibZone =
+    fibRetracement =
       price <= fib["38.2"] &&
       price >= fib["61.8"];
   } else {
-    fibZone =
+    fibRetracement =
       price >= fib["38.2"] &&
       price <= fib["61.8"];
   }
 
-  const zoneOverlap =
-    fibZone ||
+  const obTouch =
     priceInside(
       price,
       orderBlock
-    ) ||
+    );
+
+  const fvgTouch =
     priceInside(
       price,
       fvg
     );
-
-  if (!zoneOverlap) {
-    return {
-      valid: false
-    };
-  }
 
   const recent =
     candles.slice(-5);
@@ -2967,10 +2781,15 @@ function validatePullback(
 
   return {
     valid:
-      oppositeCount >= 2 ||
-      fibZone,
+      fibRetracement ||
+      obTouch ||
+      fvgTouch,
 
-    fibZone,
+    fibRetracement,
+
+    obTouch,
+
+    fvgTouch,
 
     oppositeCount
   };
@@ -2990,28 +2809,37 @@ function determineEntry(
 ) {
   const candidates = [];
 
+  // Prefer OB.
   if (orderBlock) {
-    candidates.push(
-      midpoint(
-        orderBlock.low,
-        orderBlock.high
-      )
-    );
+    candidates.push({
+      value:
+        midpoint(
+          orderBlock.low,
+          orderBlock.high
+        ),
+      priority: 1
+    });
   }
 
+  // Then FVG.
   if (fvg) {
-    candidates.push(
-      midpoint(
-        fvg.low,
-        fvg.high
-      )
-    );
+    candidates.push({
+      value:
+        midpoint(
+          fvg.low,
+          fvg.high
+        ),
+      priority: 2
+    });
   }
 
+  // Then 50% Fib retracement.
   if (fib) {
-    candidates.push(
-      fib["50"]
-    );
+    candidates.push({
+      value:
+        fib["50"],
+      priority: 3
+    });
   }
 
   if (!candidates.length) {
@@ -3019,16 +2847,29 @@ function determineEntry(
   }
 
   candidates.sort(
-    (a, b) =>
-      Math.abs(
-        a - currentPrice
-      ) -
-      Math.abs(
-        b - currentPrice
-      )
+    (a, b) => {
+      const distance =
+        Math.abs(
+          a.value -
+          currentPrice
+        ) -
+        Math.abs(
+          b.value -
+          currentPrice
+        );
+
+      if (distance !== 0) {
+        return distance;
+      }
+
+      return (
+        a.priority -
+        b.priority
+      );
+    }
   );
 
-  return candidates[0];
+  return candidates[0].value;
 }
 
 
@@ -3059,7 +2900,8 @@ function determineStopLoss(
       sweep
         ? sweep.level -
           atr * 0.10
-        : entry - atr;
+        : orderBlock.low -
+          atr * 0.10;
 
     if (
       orderBlock &&
@@ -3079,7 +2921,8 @@ function determineStopLoss(
       sweep
         ? sweep.level +
           atr * 0.10
-        : entry + atr;
+        : orderBlock.high +
+          atr * 0.10;
 
     if (
       orderBlock &&
@@ -3100,65 +2943,6 @@ function determineStopLoss(
 
 
 // ============================================================
-// OPPOSING LIQUIDITY
-// ============================================================
-
-function blockedByOpposingLiquidity(
-  candles,
-  direction,
-  takeProfit
-) {
-  const structure =
-    detectStructure(
-      candles
-    );
-
-  const currentPrice =
-    candles[
-      candles.length - 1
-    ].close;
-
-  if (
-    direction === "bullish"
-  ) {
-    for (
-      const swing of
-      structure.highs.slice(-5)
-    ) {
-      if (
-        swing.price >
-          currentPrice &&
-        swing.price <
-          takeProfit
-      ) {
-        return true;
-      }
-    }
-  }
-
-  if (
-    direction === "bearish"
-  ) {
-    for (
-      const swing of
-      structure.lows.slice(-5)
-    ) {
-      if (
-        swing.price <
-          currentPrice &&
-        swing.price >
-          takeProfit
-      ) {
-        return true;
-      }
-    }
-  }
-
-  return false;
-}
-
-
-// ============================================================
 // CONFIRMATION SCORE
 // ============================================================
 
@@ -3167,29 +2951,27 @@ function calculateScore(x) {
 
   if (
     x.htfBias &&
-    x.structureBreak
+    x.htfBias !== "neutral"
   ) {
     score += 2;
   }
 
   if (x.crt) {
-    score += 2;
+    score += 1;
   }
 
+  // Optional.
   if (x.sweep) {
-    score += 2;
+    score += 1;
   }
 
   if (x.structureBreak) {
-    score += 2;
+    score += 3;
   }
 
-  if (x.displacement) {
-    score += 2;
-  }
-
+  // Mandatory OB.
   if (x.orderBlock) {
-    score += 1;
+    score += 3;
   }
 
   if (x.fvg) {
@@ -3199,13 +2981,9 @@ function calculateScore(x) {
   if (
     x.fib &&
     x.pullback &&
-    x.pullback.fibZone
+    x.pullback.fibRetracement
   ) {
-    score += 1;
-  }
-
-  if (x.accumulation) {
-    score += 1;
+    score += 2;
   }
 
   if (
@@ -3216,6 +2994,103 @@ function calculateScore(x) {
   }
 
   return score;
+}
+
+
+// ============================================================
+// TRADE REASON
+// ============================================================
+
+function buildTradeReason({
+  instrument,
+  direction,
+  currentPrice,
+  entry,
+  fib,
+  orderBlock,
+  sweep,
+  structureBreak
+}) {
+  const side =
+    direction === "bullish"
+      ? "buy"
+      : "sell";
+
+  const obLow =
+    roundPrice(
+      orderBlock.low
+    );
+
+  const obHigh =
+    roundPrice(
+      orderBlock.high
+    );
+
+  const fib50 =
+    roundPrice(
+      fib["50"]
+    );
+
+  const mssText =
+    structureBreak?.type ||
+    "structure break";
+
+  let reason =
+    `Price is showing a ${side} structure with a valid ${mssText} and a valid order block around ${obLow}–${obHigh}. `;
+
+  if (sweep) {
+    reason +=
+      `Liquidity was also swept around ${roundPrice(sweep.level)} before the move. `;
+  }
+
+  reason +=
+    `I like the ${side} only on the retracement toward the ${fib50} Fibonacci level / order block around the planned entry — don't chase at the current price.`;
+
+  return reason;
+}
+
+
+// ============================================================
+// DEVELOPING REASON
+// ============================================================
+
+function buildDevelopingReason({
+  instrument,
+  direction,
+  currentPrice,
+  entry,
+  rejection,
+  sweep,
+  structureBreak,
+  structure
+}) {
+  const side =
+    direction === "bullish"
+      ? "buy"
+      : "sell";
+
+  let reason =
+    `Price is developing a ${side} setup with market structure supporting the move. `;
+
+  if (rejection) {
+    reason +=
+      `Price is rejecting the ${roundPrice(rejection.level)} level. `;
+  }
+
+  if (structureBreak) {
+    reason +=
+      `A ${structureBreak.type} is developing around ${roundPrice(structureBreak.level)}. `;
+  }
+
+  if (sweep) {
+    reason +=
+      `Liquidity was swept around ${roundPrice(sweep.level)}. `;
+  }
+
+  reason +=
+    `I like the ${side} only on the retrace into the planned entry — don't chase at current price.`;
+
+  return reason;
 }
 
 
@@ -3234,9 +3109,17 @@ async function runAutomaticScan(
     return;
   }
 
+  if (!env.TELEGRAM_CHAT_ID) {
+    console.error(
+      "TELEGRAM_CHAT_ID is missing"
+    );
+
+    return;
+  }
+
   try {
     const signals =
-      await generateSignals(env);
+      await generateSignals();
 
     for (
       const signal of signals
@@ -3245,10 +3128,6 @@ async function runAutomaticScan(
         signal.status ===
         "NO SIGNAL"
       ) {
-        continue;
-      }
-
-      if (!env.TELEGRAM_CHAT_ID) {
         continue;
       }
 
@@ -3303,14 +3182,22 @@ Signal levels:
 
 🟢 BUY REJECTION
 🔴 SELL REJECTION
-🟡 VALID BUY/SELL SETUP
+🟡 VALID BUY/SELL
 🔥 CONFIRMED BUY/SELL
 
 Markets:
+
 XAU/USD
 BTC/USD
 NASDAQ
 US OIL
+
+Timeframes:
+
+4H
+1H
+30M
+15M
 
 Target RR: 1:3`;
 
@@ -3329,9 +3216,7 @@ Target RR: 1:3`;
   ) {
     try {
       const signals =
-        await generateSignals(
-          env
-        );
+        await generateSignals();
 
       const activeSignals =
         signals.filter(
@@ -3399,7 +3284,7 @@ function formatTelegramSignal(
         ? "🟢"
         : "🔴";
 
-    return `${icon} ${signal.direction} REJECTION
+    return `${icon} CYBERFX ${signal.direction} REJECTION
 
 ${signal.instrument}
 
@@ -3409,9 +3294,10 @@ Rejection Level: ${signal.rejectionLevel}
 
 Current Price: ${signal.price}
 
-${signal.message}
+Reason:
+${signal.reason}
 
-⚠️ DEVELOPING OPPORTUNITY`;
+⚠️ WATCH FOR RETRACEMENT`;
   }
 
   // ==========================================================
@@ -3422,28 +3308,24 @@ ${signal.message}
     signal.status ===
     "VALID SETUP"
   ) {
-    return `🟡 CYBERFX VALID SETUP
+    return `🟡 CYBERFX VALID ${signal.direction}
 
-${signal.instrument} — ${signal.direction}
+${signal.instrument}
 
 Entry TF: ${signal.entryTF}
 
 Entry: ${signal.entry}
 
-Stop Loss: ${signal.stopLoss}
+SL: ${signal.stopLoss}
 
-Take Profit: ${signal.takeProfit}
+TP: ${signal.takeProfit}
 
-Risk/Reward: 1:3
+RR: 1:3
 
-Setup:
-${signal.components?.length
-  ? signal.components
-      .map(x => `• ${x}`)
-      .join("\n")
-  : "• Developing structure"}
+Reason:
+${signal.reason}
 
-⚠️ VALID SETUP — AWAITING FULL CONFIRMATION`;
+⚠️ VALID SETUP — DO NOT CHASE PRICE`;
   }
 
   // ==========================================================
@@ -3454,19 +3336,22 @@ ${signal.components?.length
     signal.status ===
     "CONFIRMED"
   ) {
-    return `🔥 CYBERFX SIGNAL
+    return `🔥 CYBERFX CONFIRMED ${signal.direction}
 
-${signal.instrument} — ${signal.direction}
+${signal.instrument}
 
 Entry TF: ${signal.entryTF}
 
 Entry: ${signal.entry}
 
-Stop Loss: ${signal.stopLoss}
+SL: ${signal.stopLoss}
 
-Take Profit: ${signal.takeProfit}
+TP: ${signal.takeProfit}
 
-Risk/Reward: 1:3
+RR: 1:3
+
+Reason:
+${signal.reason}
 
 ✅ CONFIRMED`;
   }
@@ -3573,6 +3458,32 @@ function roundPrice(
 }
 
 
+function findRecentLow(
+  candles
+) {
+  return Math.min(
+    ...candles
+      .slice(-10)
+      .map(
+        c => c.low
+      )
+  );
+}
+
+
+function findRecentHigh(
+  candles
+) {
+  return Math.max(
+    ...candles
+      .slice(-10)
+      .map(
+        c => c.high
+      )
+  );
+}
+
+
 function formatTF(
   tf
 ) {
@@ -3580,8 +3491,7 @@ function formatTF(
     "15min": "15M",
     "30min": "30M",
     "1h": "1H",
-    "4h": "4H",
-    "1day": "1D"
+    "4h": "4H"
   };
 
   return names[tf] || tf;
