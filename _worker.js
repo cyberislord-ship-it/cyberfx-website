@@ -5,10 +5,7 @@ export default {
     // =========================================================
     // HEALTH
     // =========================================================
-    if (
-      url.pathname === "/api/health" &&
-      request.method === "GET"
-    ) {
+    if (url.pathname === "/api/health") {
       return json({
         success: true,
         engine: "CyberFX",
@@ -22,19 +19,157 @@ export default {
 
     // =========================================================
     // PAYSTACK - INITIALIZE PAYMENT
-    //
-    // Supports both:
-    // /api/paystack/initialize
-    // /api/payment/initialize
     // =========================================================
     if (
-      (
-        url.pathname === "/api/paystack/initialize" ||
-        url.pathname === "/api/payment/initialize"
-      ) &&
+      url.pathname === "/api/payment/initialize" &&
       request.method === "POST"
     ) {
-      return initializePayment(request, env, url);
+      try {
+        if (!env.PAYSTACK_SECRET_KEY) {
+          return json({
+            success: false,
+            error: "PAYSTACK_SECRET_KEY is missing"
+          }, 500);
+        }
+
+        if (!env.DB) {
+          return json({
+            success: false,
+            error: "D1 database binding DB is missing"
+          }, 500);
+        }
+
+        const body = await request.json();
+
+        const email = String(body.email || "")
+          .trim()
+          .toLowerCase();
+
+        const plan = String(body.plan || "")
+          .trim()
+          .toLowerCase();
+
+        if (!email || !email.includes("@")) {
+          return json({
+            success: false,
+            error: "A valid email address is required"
+          }, 400);
+        }
+
+        if (!PLANS[plan]) {
+          return json({
+            success: false,
+            error: "Invalid subscription plan"
+          }, 400);
+        }
+
+        const selectedPlan = PLANS[plan];
+
+        const reference =
+          `CYBERFX-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+
+        const callbackUrl =
+          `${url.origin}/api/payment/callback`;
+
+        const paystackResponse = await fetch(
+          "https://api.paystack.co/transaction/initialize",
+          {
+            method: "POST",
+            headers: {
+              "Authorization":
+                `Bearer ${env.PAYSTACK_SECRET_KEY}`,
+              "Content-Type":
+                "application/json"
+            },
+            body: JSON.stringify({
+              email,
+              amount: selectedPlan.amount,
+              currency: "NGN",
+              reference,
+              callback_url: callbackUrl,
+              metadata: {
+                custom_fields: [
+                  {
+                    display_name: "CyberFX Plan",
+                    variable_name: "cyberfx_plan",
+                    value: selectedPlan.name
+                  }
+                ],
+                cyberfx_plan: plan,
+                duration_months: selectedPlan.months
+              }
+            })
+          }
+        );
+
+        const result =
+          await paystackResponse.json();
+
+        if (
+          !paystackResponse.ok ||
+          !result.status ||
+          !result.data
+        ) {
+          console.error(
+            "Paystack initialize error:",
+            result
+          );
+
+          return json({
+            success: false,
+            error:
+              result.message ||
+              "Unable to initialize payment"
+          }, 500);
+        }
+
+        await env.DB.prepare(`
+          INSERT INTO payments (
+            reference,
+            email,
+            plan,
+            amount,
+            status,
+            created_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?)
+        `)
+          .bind(
+            reference,
+            email,
+            plan,
+            selectedPlan.amount / 100,
+            "pending",
+            new Date().toISOString()
+          )
+          .run();
+
+        return json({
+          success: true,
+          engine: "CyberFX",
+          authorization_url:
+            result.data.authorization_url,
+          access_code:
+            result.data.access_code,
+          reference,
+          plan: selectedPlan.name,
+          amount:
+            selectedPlan.amount / 100
+        });
+
+      } catch (error) {
+        console.error(
+          "Payment initialization error:",
+          error
+        );
+
+        return json({
+          success: false,
+          error:
+            error?.message ||
+            String(error)
+        }, 500);
+      }
     }
 
     // =========================================================
@@ -45,6 +180,13 @@ export default {
       request.method === "GET"
     ) {
       try {
+        if (!env.PAYSTACK_SECRET_KEY) {
+          return json({
+            success: false,
+            error: "PAYSTACK_SECRET_KEY is missing"
+          }, 500);
+        }
+
         const reference =
           url.searchParams.get("reference");
 
@@ -55,13 +197,13 @@ export default {
           }, 400);
         }
 
-        const result =
+        const verification =
           await verifyPaystackPayment(
             reference,
             env
           );
 
-        return json(result);
+        return json(verification);
 
       } catch (error) {
         console.error(
@@ -207,10 +349,7 @@ export default {
     // =========================================================
     // RAW MARKET DATA
     // =========================================================
-    if (
-      url.pathname === "/api/signals" &&
-      request.method === "GET"
-    ) {
+    if (url.pathname === "/api/signals") {
       try {
         if (!env.TWELVE_DATA_API_KEY) {
           return json({
@@ -226,10 +365,9 @@ export default {
           success: true,
           source: "Twelve Data",
           engine: "CyberFX",
+          markets: Object.keys(INSTRUMENTS),
           timeframes:
-            TIMEFRAMES.map(
-              tf => tf.name
-            ),
+            TIMEFRAMES.map(tf => tf.name),
           data
         });
 
@@ -250,11 +388,10 @@ export default {
     }
 
     // =========================================================
-    // GENERATE CURRENT SIGNALS
+    // GENERATE SIGNALS
     // =========================================================
     if (
-      url.pathname === "/api/generate-signals" &&
-      request.method === "GET"
+      url.pathname === "/api/generate-signals"
     ) {
       try {
         const result =
@@ -263,6 +400,12 @@ export default {
         return json({
           success: true,
           engine: "CyberFX",
+          risk_reward: "1:3",
+          signal_levels: [
+            "REJECTION",
+            "VALID SETUP",
+            "CONFIRMED"
+          ],
           signals: result
         });
 
@@ -319,19 +462,7 @@ export default {
     // =========================================================
     // WEBSITE
     // =========================================================
-    if (env.ASSETS) {
-      return env.ASSETS.fetch(request);
-    }
-
-    return new Response(
-      "CyberFX Worker is online.",
-      {
-        status: 200,
-        headers: {
-          "content-type": "text/plain"
-        }
-      }
-    );
+    return env.ASSETS.fetch(request);
   },
 
   // =========================================================
@@ -344,48 +475,12 @@ export default {
   }
 };
 
+
 // ============================================================
-// CYBERFX PLANS
-// ============================================================
-//
-// IMPORTANT:
-// Paystack amounts are in KOBO.
-//
-// ₦10,000  = 1,000,000 kobo
-// ₦30,000  = 3,000,000 kobo
-// ₦60,000  = 6,000,000 kobo
-// ₦120,000 = 12,000,000 kobo
-//
-// The aliases below match the website buttons:
-// monthly / quarterly / biannual / annual
+// PLANS
 // ============================================================
 
 const PLANS = {
-  "monthly": {
-    name: "1 Month",
-    months: 1,
-    amount: 1000000
-  },
-
-  "quarterly": {
-    name: "3 Months",
-    months: 3,
-    amount: 3000000
-  },
-
-  "biannual": {
-    name: "6 Months",
-    months: 6,
-    amount: 6000000
-  },
-
-  "annual": {
-    name: "12 Months",
-    months: 12,
-    amount: 12000000
-  },
-
-  // Compatibility aliases
   "1-month": {
     name: "1 Month",
     months: 1,
@@ -411,199 +506,6 @@ const PLANS = {
   }
 };
 
-// ============================================================
-// INITIALIZE PAYMENT
-// ============================================================
-
-async function initializePayment(
-  request,
-  env,
-  url
-) {
-  try {
-    if (!env.PAYSTACK_SECRET_KEY) {
-      return json({
-        success: false,
-        error: "PAYSTACK_SECRET_KEY is missing"
-      }, 500);
-    }
-
-    if (!env.DB) {
-      return json({
-        success: false,
-        error: "D1 database binding DB is missing"
-      }, 500);
-    }
-
-    const body =
-      await request.json();
-
-    const email =
-      String(body.email || "")
-        .trim()
-        .toLowerCase();
-
-    const plan =
-      String(body.plan || "")
-        .trim()
-        .toLowerCase();
-
-    if (
-      !email ||
-      !email.includes("@") ||
-      !email.includes(".")
-    ) {
-      return json({
-        success: false,
-        error: "A valid email address is required"
-      }, 400);
-    }
-
-    if (!PLANS[plan]) {
-      return json({
-        success: false,
-        error:
-          "Invalid subscription plan. Expected monthly, quarterly, biannual or annual."
-      }, 400);
-    }
-
-    const selectedPlan =
-      PLANS[plan];
-
-    const reference =
-      `CYBERFX-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
-
-    const callbackUrl =
-      `${url.origin}/api/payment/callback`;
-
-    const paystackResponse =
-      await fetch(
-        "https://api.paystack.co/transaction/initialize",
-        {
-          method: "POST",
-
-          headers: {
-            "Authorization":
-              `Bearer ${env.PAYSTACK_SECRET_KEY}`,
-
-            "Content-Type":
-              "application/json"
-          },
-
-          body:
-            JSON.stringify({
-              email,
-
-              amount:
-                selectedPlan.amount,
-
-              currency:
-                "NGN",
-
-              reference,
-
-              callback_url:
-                callbackUrl,
-
-              metadata: {
-                cyberfx_plan:
-                  plan,
-
-                duration_months:
-                  selectedPlan.months,
-
-                custom_fields: [
-                  {
-                    display_name:
-                      "CyberFX Plan",
-
-                    variable_name:
-                      "cyberfx_plan",
-
-                    value:
-                      selectedPlan.name
-                  }
-                ]
-              }
-            })
-        }
-      );
-
-    const result =
-      await paystackResponse.json();
-
-    if (
-      !paystackResponse.ok ||
-      !result.status ||
-      !result.data
-    ) {
-      console.error(
-        "Paystack initialize error:",
-        result
-      );
-
-      return json({
-        success: false,
-        error:
-          result.message ||
-          "Unable to initialize payment"
-      }, 500);
-    }
-
-    await env.DB.prepare(`
-      INSERT INTO payments (
-        reference,
-        email,
-        plan,
-        amount,
-        status,
-        created_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?)
-    `)
-      .bind(
-        reference,
-        email,
-        plan,
-        selectedPlan.amount / 100,
-        "pending",
-        new Date().toISOString()
-      )
-      .run();
-
-    return json({
-      success: true,
-      engine: "CyberFX",
-
-      authorization_url:
-        result.data.authorization_url,
-
-      access_code:
-        result.data.access_code,
-
-      reference,
-
-      plan:
-        selectedPlan.name,
-
-      amount:
-        selectedPlan.amount / 100
-    });
-
-  } catch (error) {
-    console.error(
-      "Payment initialization error:",
-      error
-    );
-
-    return json({
-      success: false,
-      error:
-        error?.message ||
-        String(error)
-    }, 500);
-  }
-}
 
 // ============================================================
 // PAYSTACK VERIFICATION
@@ -630,7 +532,6 @@ async function verifyPaystackPayment(
       `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
       {
         method: "GET",
-
         headers: {
           "Authorization":
             `Bearer ${env.PAYSTACK_SECRET_KEY}`
@@ -661,13 +562,7 @@ async function verifyPaystackPayment(
   const paymentStatus =
     transaction.status;
 
-  // ----------------------------------------------------------
-  // Payment not successful
-  // ----------------------------------------------------------
-
-  if (
-    paymentStatus !== "success"
-  ) {
+  if (paymentStatus !== "success") {
     await env.DB.prepare(`
       UPDATE payments
       SET status = ?
@@ -687,10 +582,6 @@ async function verifyPaystackPayment(
     };
   }
 
-  // ----------------------------------------------------------
-  // Get customer email
-  // ----------------------------------------------------------
-
   const email =
     String(
       transaction.customer?.email || ""
@@ -707,17 +598,10 @@ async function verifyPaystackPayment(
     };
   }
 
-  // ----------------------------------------------------------
-  // Determine plan
-  // ----------------------------------------------------------
-
   let plan =
     transaction.metadata?.cyberfx_plan;
 
-  if (
-    !plan ||
-    !PLANS[plan]
-  ) {
+  if (!plan || !PLANS[plan]) {
     const existing =
       await env.DB.prepare(`
         SELECT plan
@@ -732,10 +616,7 @@ async function verifyPaystackPayment(
       existing?.plan;
   }
 
-  if (
-    !plan ||
-    !PLANS[plan]
-  ) {
+  if (!plan || !PLANS[plan]) {
     return {
       success: false,
       payment_status: "failed",
@@ -746,10 +627,6 @@ async function verifyPaystackPayment(
 
   const selectedPlan =
     PLANS[plan];
-
-  // ----------------------------------------------------------
-  // Verify exact amount
-  // ----------------------------------------------------------
 
   if (
     Number(transaction.amount) !==
@@ -768,17 +645,11 @@ async function verifyPaystackPayment(
 
     return {
       success: false,
-      payment_status:
-        "amount_mismatch",
-
+      payment_status: "amount_mismatch",
       error:
         "Payment amount does not match the selected plan"
     };
   }
-
-  // ----------------------------------------------------------
-  // Check existing payment
-  // ----------------------------------------------------------
 
   const existingPayment =
     await env.DB.prepare(`
@@ -790,13 +661,7 @@ async function verifyPaystackPayment(
       .bind(reference)
       .first();
 
-  // ----------------------------------------------------------
-  // Prevent duplicate extension
-  // ----------------------------------------------------------
-
-  if (
-    existingPayment?.status === "success"
-  ) {
+  if (existingPayment?.status === "success") {
     const existingSubscription =
       await getActiveSubscription(
         email,
@@ -809,22 +674,15 @@ async function verifyPaystackPayment(
       reference,
       email,
       plan,
-      plan_name:
-        selectedPlan.name,
-
+      plan_name: selectedPlan.name,
       starts_at:
         existingSubscription?.starts_at ||
         null,
-
       expires_at:
         existingSubscription?.expires_at ||
         null
     };
   }
-
-  // ----------------------------------------------------------
-  // Calculate subscription dates
-  // ----------------------------------------------------------
 
   const now =
     new Date();
@@ -838,8 +696,6 @@ async function verifyPaystackPayment(
   let startDate =
     now;
 
-  // If user already has time remaining,
-  // add the new subscription after expiry.
   if (
     activeSubscription?.expires_at
   ) {
@@ -848,9 +704,7 @@ async function verifyPaystackPayment(
         activeSubscription.expires_at
       );
 
-    if (
-      currentExpiry > now
-    ) {
+    if (currentExpiry > now) {
       startDate =
         currentExpiry;
     }
@@ -861,10 +715,6 @@ async function verifyPaystackPayment(
       startDate,
       selectedPlan.months
     );
-
-  // ----------------------------------------------------------
-  // Mark payment successful
-  // ----------------------------------------------------------
 
   await env.DB.prepare(`
     UPDATE payments
@@ -883,10 +733,6 @@ async function verifyPaystackPayment(
       reference
     )
     .run();
-
-  // ----------------------------------------------------------
-  // Create / update subscription
-  // ----------------------------------------------------------
 
   await env.DB.prepare(`
     INSERT INTO subscriptions (
@@ -908,10 +754,8 @@ async function verifyPaystackPayment(
       starts_at = excluded.starts_at,
       expires_at = excluded.expires_at,
       status = excluded.status,
-      payment_reference =
-        excluded.payment_reference,
-      updated_at =
-        excluded.updated_at
+      payment_reference = excluded.payment_reference,
+      updated_at = excluded.updated_at
   `)
     .bind(
       email,
@@ -932,17 +776,14 @@ async function verifyPaystackPayment(
     reference,
     email,
     plan,
-
-    plan_name:
-      selectedPlan.name,
-
+    plan_name: selectedPlan.name,
     starts_at:
       startDate.toISOString(),
-
     expires_at:
       expires.toISOString()
   };
 }
+
 
 // ============================================================
 // ACTIVE SUBSCRIPTION
@@ -990,9 +831,8 @@ async function getActiveSubscription(
   ) {
     await env.DB.prepare(`
       UPDATE subscriptions
-      SET
-        status = ?,
-        updated_at = ?
+      SET status = ?,
+          updated_at = ?
       WHERE email = ?
     `)
       .bind(
@@ -1007,6 +847,7 @@ async function getActiveSubscription(
 
   return subscription;
 }
+
 
 // ============================================================
 // ADD MONTHS
@@ -1025,8 +866,7 @@ function addMonths(
   result.setUTCDate(1);
 
   result.setUTCMonth(
-    result.getUTCMonth() +
-    months
+    result.getUTCMonth() + months
   );
 
   const lastDay =
@@ -1048,8 +888,9 @@ function addMonths(
   return result;
 }
 
+
 // ============================================================
-// MARKET CONFIGURATION
+// CYBERFX MARKETS
 // ============================================================
 
 const INSTRUMENTS = {
@@ -1058,6 +899,11 @@ const INSTRUMENTS = {
   "NASDAQ": "NDX",
   "US OIL": "WTI"
 };
+
+
+// ============================================================
+// TIMEFRAMES
+// ============================================================
 
 const TIMEFRAMES = [
   {
@@ -1082,6 +928,11 @@ const TIMEFRAMES = [
   }
 ];
 
+
+// ============================================================
+// ENTRY TIMEFRAMES
+// ============================================================
+
 const ENTRY_TIMEFRAMES = [
   "15min",
   "30min",
@@ -1089,15 +940,19 @@ const ENTRY_TIMEFRAMES = [
   "4h"
 ];
 
+
+// ============================================================
+// CONFIRMATION
+// ============================================================
+
 const CONFIRMED_SCORE = 13;
 
+
 // ============================================================
-// LOAD MARKET DATA
+// LOAD ALL MARKETS
 // ============================================================
 
-async function loadAllMarkets(
-  env
-) {
+async function loadAllMarkets(env) {
   if (!env.TWELVE_DATA_API_KEY) {
     throw new Error(
       "TWELVE_DATA_API_KEY is missing"
@@ -1108,9 +963,7 @@ async function loadAllMarkets(
 
   for (
     const [name, symbol]
-    of Object.entries(
-      INSTRUMENTS
-    )
+    of Object.entries(INSTRUMENTS)
   ) {
     data[name] = {};
 
@@ -1128,6 +981,7 @@ async function loadAllMarkets(
 
   return data;
 }
+
 
 // ============================================================
 // TWELVE DATA
@@ -1176,11 +1030,9 @@ async function getCandles(
     ) {
       return {
         status: "error",
-
         code:
           result.code ||
           response.status,
-
         message:
           result.message ||
           "Twelve Data request failed"
@@ -1189,13 +1041,10 @@ async function getCandles(
 
     return {
       status: "success",
-
       symbol:
         result.meta?.symbol ||
         symbol,
-
       interval,
-
       candles:
         result.values || []
     };
@@ -1203,7 +1052,6 @@ async function getCandles(
   } catch (error) {
     return {
       status: "error",
-
       message:
         error?.message ||
         String(error)
@@ -1211,13 +1059,12 @@ async function getCandles(
   }
 }
 
+
 // ============================================================
 // MAIN SIGNAL ENGINE
 // ============================================================
 
-async function generateSignals(
-  env
-) {
+async function generateSignals(env) {
   const marketData =
     await loadAllMarkets(env);
 
@@ -1225,18 +1072,21 @@ async function generateSignals(
 
   for (
     const instrument
-    of Object.keys(
-      INSTRUMENTS
-    )
+    of Object.keys(INSTRUMENTS)
   ) {
     const market =
       marketData[instrument];
 
     if (!market) {
+      results.push({
+        instrument,
+        status: "NO SIGNAL"
+      });
+
       continue;
     }
 
-    let confirmed = null;
+    const candidates = [];
 
     for (
       const entryTF
@@ -1249,33 +1099,61 @@ async function generateSignals(
           entryTF
         );
 
-      if (
-        result &&
-        result.status ===
-          "CONFIRMED"
-      ) {
-        confirmed = result;
-        break;
+      if (result) {
+        candidates.push(result);
       }
     }
 
-    if (confirmed) {
-      results.push(
-        confirmed
-      );
-    } else {
+    if (!candidates.length) {
       results.push({
         instrument,
         status: "NO SIGNAL"
       });
+
+      continue;
     }
+
+    const tfPriority = {
+      "4h": 4,
+      "1h": 3,
+      "30min": 2,
+      "15min": 1
+    };
+
+    const signalPriority = {
+      "REJECTION": 1,
+      "VALID SETUP": 2,
+      "CONFIRMED": 3
+    };
+
+    candidates.sort(
+      (a, b) => {
+        const quality =
+          signalPriority[b.status] -
+          signalPriority[a.status];
+
+        if (quality !== 0) {
+          return quality;
+        }
+
+        return (
+          (tfPriority[b.entryTFRaw] || 0) -
+          (tfPriority[a.entryTFRaw] || 0)
+        );
+      }
+    );
+
+    results.push(
+      candidates[0]
+    );
   }
 
   return results;
 }
 
+
 // ============================================================
-// ANALYSIS
+// ANALYZE INSTRUMENT
 // ============================================================
 
 function analyzeInstrument(
@@ -1307,28 +1185,47 @@ function analyzeInstrument(
     return null;
   }
 
-  const htfBias =
-    determineHTFBias(
-      market
-    );
+  const current =
+    closed[closed.length - 1];
 
-  if (
-    htfBias === "neutral"
-  ) {
-    return null;
-  }
+  const htfBias =
+    determineHTFBias(market);
 
   const structure =
-    detectStructure(
-      closed
+    detectStructure(closed);
+
+  // ==========================================================
+  // STAGE 1 — REJECTION
+  // ==========================================================
+
+  const rejection =
+    detectRejection(
+      closed,
+      structure
     );
 
+  let bestResult = null;
+
   if (
-    structure.direction !==
-    htfBias
+    rejection &&
+    (
+      htfBias === "neutral" ||
+      rejection.direction === htfBias
+    )
   ) {
-    return null;
+    bestResult =
+      buildRejectionSignal(
+        instrument,
+        entryTF,
+        rejection,
+        htfBias,
+        current
+      );
   }
+
+  // ==========================================================
+  // CRT
+  // ==========================================================
 
   const accumulation =
     detectAccumulation(
@@ -1341,9 +1238,9 @@ function analyzeInstrument(
       accumulation
     );
 
-  if (!crt) {
-    return null;
-  }
+  // ==========================================================
+  // LIQUIDITY
+  // ==========================================================
 
   const sweep =
     detectLiquiditySweep(
@@ -1352,16 +1249,25 @@ function analyzeInstrument(
       structure
     );
 
-  if (!sweep) {
-    return null;
+  // ==========================================================
+  // DIRECTION
+  // ==========================================================
+
+  const direction =
+    determineDevelopingDirection(
+      htfBias,
+      rejection,
+      sweep,
+      structure
+    );
+
+  if (!direction) {
+    return bestResult;
   }
 
-  if (
-    sweep.direction !==
-    htfBias
-  ) {
-    return null;
-  }
+  // ==========================================================
+  // DISPLACEMENT
+  // ==========================================================
 
   const displacement =
     detectDisplacement(
@@ -1369,9 +1275,9 @@ function analyzeInstrument(
       sweep
     );
 
-  if (!displacement) {
-    return null;
-  }
+  // ==========================================================
+  // BOS / MSS
+  // ==========================================================
 
   const structureBreak =
     detectBOSMSS(
@@ -1380,8 +1286,70 @@ function analyzeInstrument(
       displacement
     );
 
-  if (!structureBreak) {
-    return null;
+  // ==========================================================
+  // VALID SETUP
+  // ==========================================================
+
+  const validSetup =
+    detectValidSetup(
+      closed,
+      direction,
+      htfBias,
+      rejection,
+      crt,
+      sweep,
+      displacement,
+      structureBreak,
+      structure
+    );
+
+  if (validSetup) {
+    const setupSignal =
+      buildValidSetupSignal(
+        instrument,
+        entryTF,
+        direction,
+        closed,
+        sweep,
+        structure,
+        crt,
+        displacement,
+        structureBreak,
+        rejection,
+        htfBias
+      );
+
+    if (
+      setupSignal &&
+      (
+        !bestResult ||
+        SIGNAL_PRIORITY[setupSignal.status] >
+          SIGNAL_PRIORITY[bestResult.status]
+      )
+    ) {
+      bestResult =
+        setupSignal;
+    }
+  }
+
+  // ==========================================================
+  // FULL CONFIRMATION
+  // ==========================================================
+
+  if (
+    !crt ||
+    !sweep ||
+    !displacement ||
+    !structureBreak
+  ) {
+    return bestResult;
+  }
+
+  if (
+    htfBias !== "neutral" &&
+    direction !== htfBias
+  ) {
+    return bestResult;
   }
 
   const impulse =
@@ -1392,7 +1360,7 @@ function analyzeInstrument(
     );
 
   if (!impulse) {
-    return null;
+    return bestResult;
   }
 
   const fib =
@@ -1415,9 +1383,7 @@ function analyzeInstrument(
     );
 
   const currentPrice =
-    closed[
-      closed.length - 1
-    ].close;
+    current.close;
 
   const pullback =
     validatePullback(
@@ -1430,7 +1396,7 @@ function analyzeInstrument(
     );
 
   if (!pullback.valid) {
-    return null;
+    return bestResult;
   }
 
   const entry =
@@ -1443,7 +1409,7 @@ function analyzeInstrument(
     );
 
   if (!entry) {
-    return null;
+    return bestResult;
   }
 
   const stopLoss =
@@ -1456,42 +1422,26 @@ function analyzeInstrument(
     );
 
   if (!stopLoss) {
-    return null;
+    return bestResult;
   }
 
   const risk =
-    structureBreak.direction ===
-    "bullish"
+    structureBreak.direction === "bullish"
       ? entry - stopLoss
       : stopLoss - entry;
 
   if (risk <= 0) {
-    return null;
+    return bestResult;
   }
 
   // ==========================================================
-  // IMPORTANT:
-  // CyberFX target is now exactly 1:6
+  // 1:3 RR
   // ==========================================================
-
-  const reward =
-    risk * 6;
 
   const takeProfit =
-    structureBreak.direction ===
-    "bullish"
-      ? entry + reward
-      : entry - reward;
-
-  if (
-    blockedByOpposingLiquidity(
-      closed,
-      structureBreak.direction,
-      takeProfit
-    )
-  ) {
-    return null;
-  }
+    structureBreak.direction === "bullish"
+      ? entry + risk * 3
+      : entry - risk * 3;
 
   const score =
     calculateScore({
@@ -1516,26 +1466,26 @@ function analyzeInstrument(
     risk > 0;
 
   if (!mandatoryPassed) {
-    return null;
+    return bestResult;
   }
 
-  if (
-    score < CONFIRMED_SCORE
-  ) {
-    return null;
+  if (score < CONFIRMED_SCORE) {
+    return bestResult;
   }
 
   return {
     instrument,
 
     direction:
-      structureBreak.direction ===
-      "bullish"
+      structureBreak.direction === "bullish"
         ? "BUY"
         : "SELL",
 
     entryTF:
       formatTF(entryTF),
+
+    entryTFRaw:
+      entryTF,
 
     entry:
       roundPrice(entry),
@@ -1546,11 +1496,14 @@ function analyzeInstrument(
     takeProfit:
       roundPrice(takeProfit),
 
-    riskReward:
-      "1:6",
+    riskReward: "1:3",
 
-    status:
-      "CONFIRMED",
+    status: "CONFIRMED",
+
+    label:
+      structureBreak.direction === "bullish"
+        ? "🔥 CONFIRMED BUY"
+        : "🔥 CONFIRMED SELL",
 
     internal: {
       score,
@@ -1567,6 +1520,466 @@ function analyzeInstrument(
     }
   };
 }
+
+
+// ============================================================
+// REJECTION DETECTOR
+// ============================================================
+
+function detectRejection(
+  candles,
+  structure
+) {
+  const current =
+    candles[candles.length - 1];
+
+  if (!current) {
+    return null;
+  }
+
+  const range =
+    current.high -
+    current.low;
+
+  if (!range || range <= 0) {
+    return null;
+  }
+
+  const body =
+    Math.abs(
+      current.close -
+      current.open
+    );
+
+  const upperWick =
+    current.high -
+    Math.max(
+      current.open,
+      current.close
+    );
+
+  const lowerWick =
+    Math.min(
+      current.open,
+      current.close
+    ) -
+    current.low;
+
+  const closeLocation =
+    (current.close -
+      current.low) /
+    range;
+
+  const atr =
+    ATR(candles);
+
+  const meaningfulRange =
+    atr
+      ? range >= atr * 0.35
+      : true;
+
+  if (!meaningfulRange) {
+    return null;
+  }
+
+  // ==========================================================
+  // BUY REJECTION
+  // ==========================================================
+
+  if (
+    lowerWick >=
+      Math.max(body * 1.25, range * 0.30) &&
+    closeLocation >= 0.60
+  ) {
+    const level =
+      current.low;
+
+    const nearSwingLow =
+      structure?.lows?.some(
+        swing =>
+          Math.abs(
+            swing.price - level
+          ) <= range * 0.50
+      );
+
+    if (
+      nearSwingLow ||
+      lowerWick >= range * 0.40
+    ) {
+      return {
+        direction: "bullish",
+        type: "BUY REJECTION",
+        level,
+        candle: current,
+        wick: lowerWick,
+        reason:
+          nearSwingLow
+            ? "Swing low rejection"
+            : "Strong lower-wick rejection"
+      };
+    }
+  }
+
+  // ==========================================================
+  // SELL REJECTION
+  // ==========================================================
+
+  if (
+    upperWick >=
+      Math.max(body * 1.25, range * 0.30) &&
+    closeLocation <= 0.40
+  ) {
+    const level =
+      current.high;
+
+    const nearSwingHigh =
+      structure?.highs?.some(
+        swing =>
+          Math.abs(
+            swing.price - level
+          ) <= range * 0.50
+      );
+
+    if (
+      nearSwingHigh ||
+      upperWick >= range * 0.40
+    ) {
+      return {
+        direction: "bearish",
+        type: "SELL REJECTION",
+        level,
+        candle: current,
+        wick: upperWick,
+        reason:
+          nearSwingHigh
+            ? "Swing high rejection"
+            : "Strong upper-wick rejection"
+      };
+    }
+  }
+
+  return null;
+}
+
+
+// ============================================================
+// DEVELOPING DIRECTION
+// ============================================================
+
+function determineDevelopingDirection(
+  htfBias,
+  rejection,
+  sweep,
+  structure
+) {
+  if (sweep?.direction) {
+    if (
+      htfBias === "neutral" ||
+      sweep.direction === htfBias
+    ) {
+      return sweep.direction;
+    }
+  }
+
+  if (rejection?.direction) {
+    if (
+      htfBias === "neutral" ||
+      rejection.direction === htfBias
+    ) {
+      return rejection.direction;
+    }
+  }
+
+  if (
+    structure?.direction &&
+    structure.direction !== "neutral"
+  ) {
+    if (
+      htfBias === "neutral" ||
+      structure.direction === htfBias
+    ) {
+      return structure.direction;
+    }
+  }
+
+  return null;
+}
+
+
+// ============================================================
+// VALID SETUP
+// ============================================================
+
+function detectValidSetup(
+  candles,
+  direction,
+  htfBias,
+  rejection,
+  crt,
+  sweep,
+  displacement,
+  structureBreak,
+  structure
+) {
+  let score = 0;
+
+  if (htfBias === direction) {
+    score += 2;
+  }
+
+  if (
+    rejection &&
+    rejection.direction === direction
+  ) {
+    score += 2;
+  }
+
+  if (crt) {
+    score += 1;
+  }
+
+  if (
+    sweep &&
+    sweep.direction === direction
+  ) {
+    score += 3;
+  }
+
+  if (
+    displacement &&
+    displacement.direction === direction
+  ) {
+    score += 2;
+  }
+
+  if (
+    structureBreak &&
+    structureBreak.direction === direction
+  ) {
+    score += 3;
+  }
+
+  if (
+    structure &&
+    structure.direction === direction
+  ) {
+    score += 1;
+  }
+
+  return score >= 5;
+}
+
+
+// ============================================================
+// REJECTION SIGNAL
+// ============================================================
+
+function buildRejectionSignal(
+  instrument,
+  entryTF,
+  rejection,
+  htfBias,
+  current
+) {
+  const direction =
+    rejection.direction === "bullish"
+      ? "BUY"
+      : "SELL";
+
+  return {
+    instrument,
+
+    direction,
+
+    entryTF:
+      formatTF(entryTF),
+
+    entryTFRaw:
+      entryTF,
+
+    status: "REJECTION",
+
+    label:
+      direction === "BUY"
+        ? "🟢 BUY REJECTION"
+        : "🔴 SELL REJECTION",
+
+    rejectionLevel:
+      roundPrice(
+        rejection.level
+      ),
+
+    price:
+      roundPrice(
+        current.close
+      ),
+
+    rejectionReason:
+      rejection.reason,
+
+    message:
+      direction === "BUY"
+        ? "Price rejected the level and closed back above it."
+        : "Price rejected the level and closed back below it.",
+
+    internal: {
+      htfBias,
+      rejection
+    }
+  };
+}
+
+
+// ============================================================
+// VALID SETUP BUILDER
+// ============================================================
+
+function buildValidSetupSignal(
+  instrument,
+  entryTF,
+  direction,
+  candles,
+  sweep,
+  structure,
+  crt,
+  displacement,
+  structureBreak,
+  rejection,
+  htfBias
+) {
+  const current =
+    candles[candles.length - 1];
+
+  let entry =
+    current.close;
+
+  if (rejection?.level) {
+    entry =
+      rejection.level;
+  }
+
+  if (sweep?.level) {
+    entry =
+      sweep.level;
+  }
+
+  const atr =
+    ATR(candles);
+
+  if (!atr) {
+    return null;
+  }
+
+  let stopLoss;
+
+  if (direction === "bullish") {
+    stopLoss =
+      (sweep?.level ||
+        rejection?.level ||
+        current.low) -
+      atr * 0.25;
+  } else {
+    stopLoss =
+      (sweep?.level ||
+        rejection?.level ||
+        current.high) +
+      atr * 0.25;
+  }
+
+  const risk =
+    direction === "bullish"
+      ? entry - stopLoss
+      : stopLoss - entry;
+
+  if (risk <= 0) {
+    return null;
+  }
+
+  const takeProfit =
+    direction === "bullish"
+      ? entry + risk * 3
+      : entry - risk * 3;
+
+  const components = [];
+
+  if (htfBias === direction) {
+    components.push("HTF Bias");
+  }
+
+  if (
+    structure?.direction ===
+    direction
+  ) {
+    components.push("Structure");
+  }
+
+  if (rejection) {
+    components.push("Rejection");
+  }
+
+  if (sweep) {
+    components.push("Liquidity Sweep");
+  }
+
+  if (displacement) {
+    components.push("Displacement");
+  }
+
+  if (structureBreak) {
+    components.push(
+      structureBreak.type
+    );
+  }
+
+  if (crt) {
+    components.push("CRT");
+  }
+
+  return {
+    instrument,
+
+    direction:
+      direction === "bullish"
+        ? "BUY"
+        : "SELL",
+
+    entryTF:
+      formatTF(entryTF),
+
+    entryTFRaw:
+      entryTF,
+
+    entry:
+      roundPrice(entry),
+
+    stopLoss:
+      roundPrice(stopLoss),
+
+    takeProfit:
+      roundPrice(takeProfit),
+
+    riskReward: "1:3",
+
+    status: "VALID SETUP",
+
+    label:
+      direction === "bullish"
+        ? "🟡 VALID BUY SETUP"
+        : "🟡 VALID SELL SETUP",
+
+    components,
+
+    internal: {
+      htfBias,
+      crt,
+      sweep,
+      displacement,
+      structureBreak,
+      rejection
+    }
+  };
+}
+
 
 // ============================================================
 // CANDLE NORMALIZATION
@@ -1595,6 +2008,7 @@ function normalizeCandles(
         new Date(b.time)
     );
 }
+
 
 // ============================================================
 // ATR
@@ -1646,6 +2060,7 @@ function ATR(
 
   return average(ranges);
 }
+
 
 // ============================================================
 // MARKET STRUCTURE
@@ -1749,6 +2164,7 @@ function detectStructure(
   };
 }
 
+
 // ============================================================
 // HIGHER TIMEFRAME BIAS
 // ============================================================
@@ -1783,9 +2199,7 @@ function determineHTFBias(
         data.candles
       ).slice(0, -1);
 
-    if (
-      candles.length < 30
-    ) {
+    if (candles.length < 30) {
       continue;
     }
 
@@ -1795,15 +2209,13 @@ function determineHTFBias(
       );
 
     if (
-      structure.direction ===
-      "bullish"
+      structure.direction === "bullish"
     ) {
       bullish++;
     }
 
     if (
-      structure.direction ===
-      "bearish"
+      structure.direction === "bearish"
     ) {
       bearish++;
     }
@@ -1819,6 +2231,7 @@ function determineHTFBias(
 
   return "neutral";
 }
+
 
 // ============================================================
 // ACCUMULATION
@@ -1907,6 +2320,7 @@ function detectAccumulation(
   };
 }
 
+
 // ============================================================
 // CRT
 // ============================================================
@@ -1952,6 +2366,7 @@ function detectCRT(
       reference.time
   };
 }
+
 
 // ============================================================
 // LIQUIDITY SWEEP
@@ -2048,6 +2463,7 @@ function detectLiquiditySweep(
   return null;
 }
 
+
 // ============================================================
 // DISPLACEMENT
 // ============================================================
@@ -2066,14 +2482,10 @@ function detectDisplacement(
     ];
 
   const previous10 =
-    candles.slice(
-      -11,
-      -1
-    );
+    candles.slice(-11, -1);
 
   if (
-    previous10.length <
-    10
+    previous10.length < 10
   ) {
     return null;
   }
@@ -2084,7 +2496,7 @@ function detectDisplacement(
         c =>
           Math.abs(
             c.close -
-              c.open
+            c.open
           )
       )
     );
@@ -2092,7 +2504,7 @@ function detectDisplacement(
   const body =
     Math.abs(
       current.close -
-        current.open
+      current.open
     );
 
   const range =
@@ -2107,10 +2519,9 @@ function detectDisplacement(
     body / range;
 
   const closeLocation =
-    (
-      current.close -
-      current.low
-    ) / range;
+    (current.close -
+      current.low) /
+    range;
 
   const bullish =
     current.close >
@@ -2165,6 +2576,7 @@ function detectDisplacement(
 
   return null;
 }
+
 
 // ============================================================
 // BOS / MSS
@@ -2248,8 +2660,9 @@ function detectBOSMSS(
   return null;
 }
 
+
 // ============================================================
-// IMPULSE LEG
+// IMPULSE
 // ============================================================
 
 function getImpulseLeg(
@@ -2283,6 +2696,7 @@ function getImpulseLeg(
       structureBreak.level
   };
 }
+
 
 // ============================================================
 // FIBONACCI
@@ -2339,6 +2753,7 @@ function calculateFib(
       range * 0.618
   };
 }
+
 
 // ============================================================
 // ORDER BLOCK
@@ -2422,6 +2837,7 @@ function findOrderBlock(
   return null;
 }
 
+
 // ============================================================
 // FVG
 // ============================================================
@@ -2477,6 +2893,7 @@ function findFVG(
 
   return null;
 }
+
 
 // ============================================================
 // HEALTHY PULLBACK
@@ -2559,6 +2976,7 @@ function validatePullback(
   };
 }
 
+
 // ============================================================
 // ENTRY
 // ============================================================
@@ -2596,9 +3014,7 @@ function determineEntry(
     );
   }
 
-  if (
-    !candidates.length
-  ) {
+  if (!candidates.length) {
     return currentPrice;
   }
 
@@ -2614,6 +3030,7 @@ function determineEntry(
 
   return candidates[0];
 }
+
 
 // ============================================================
 // STOP LOSS
@@ -2656,6 +3073,7 @@ function determineStopLoss(
     if (sl >= entry) {
       return null;
     }
+
   } else {
     sl =
       sweep
@@ -2679,6 +3097,7 @@ function determineStopLoss(
 
   return sl;
 }
+
 
 // ============================================================
 // OPPOSING LIQUIDITY
@@ -2737,6 +3156,7 @@ function blockedByOpposingLiquidity(
 
   return false;
 }
+
 
 // ============================================================
 // CONFIRMATION SCORE
@@ -2798,6 +3218,7 @@ function calculateScore(x) {
   return score;
 }
 
+
 // ============================================================
 // AUTOMATIC TELEGRAM SCANNER
 // ============================================================
@@ -2805,9 +3226,7 @@ function calculateScore(x) {
 async function runAutomaticScan(
   env
 ) {
-  if (
-    !env.TELEGRAM_BOT_TOKEN
-  ) {
+  if (!env.TELEGRAM_BOT_TOKEN) {
     console.error(
       "TELEGRAM_BOT_TOKEN is missing"
     );
@@ -2817,17 +3236,19 @@ async function runAutomaticScan(
 
   try {
     const signals =
-      await generateSignals(
-        env
-      );
+      await generateSignals(env);
 
     for (
       const signal of signals
     ) {
       if (
-        signal.status !==
-        "CONFIRMED"
+        signal.status ===
+        "NO SIGNAL"
       ) {
+        continue;
+      }
+
+      if (!env.TELEGRAM_CHAT_ID) {
         continue;
       }
 
@@ -2836,15 +3257,11 @@ async function runAutomaticScan(
           signal
         );
 
-      if (
-        env.TELEGRAM_CHAT_ID
-      ) {
-        await sendTelegramMessage(
-          env.TELEGRAM_CHAT_ID,
-          message,
-          env.TELEGRAM_BOT_TOKEN
-        );
-      }
+      await sendTelegramMessage(
+        env.TELEGRAM_CHAT_ID,
+        message,
+        env.TELEGRAM_BOT_TOKEN
+      );
     }
 
   } catch (error) {
@@ -2855,8 +3272,9 @@ async function runAutomaticScan(
   }
 }
 
+
 // ============================================================
-// TELEGRAM MESSAGE HANDLER
+// TELEGRAM HANDLER
 // ============================================================
 
 async function handleTelegramMessage(
@@ -2879,9 +3297,22 @@ async function handleTelegramMessage(
     const welcome =
       `🔥 Welcome to CyberFX!
 
-Your Telegram is now connected to CyberFX.
+CyberFX is now connected.
 
-You will receive confirmed trading signals here when available.`;
+Signal levels:
+
+🟢 BUY REJECTION
+🔴 SELL REJECTION
+🟡 VALID BUY/SELL SETUP
+🔥 CONFIRMED BUY/SELL
+
+Markets:
+XAU/USD
+BTC/USD
+NASDAQ
+US OIL
+
+Target RR: 1:3`;
 
     await sendTelegramMessage(
       chatId,
@@ -2902,19 +3333,17 @@ You will receive confirmed trading signals here when available.`;
           env
         );
 
-      const confirmed =
+      const activeSignals =
         signals.filter(
           s =>
-            s.status ===
-            "CONFIRMED"
+            s.status !==
+            "NO SIGNAL"
         );
 
-      if (
-        !confirmed.length
-      ) {
+      if (!activeSignals.length) {
         await sendTelegramMessage(
           chatId,
-          "CYBERFX\n\nNo confirmed signal at the moment.",
+          "CYBERFX\n\nNo active rejection, valid setup, or confirmed signal at the moment.",
           env.TELEGRAM_BOT_TOKEN
         );
 
@@ -2923,7 +3352,7 @@ You will receive confirmed trading signals here when available.`;
 
       for (
         const signal of
-        confirmed
+        activeSignals
       ) {
         await sendTelegramMessage(
           chatId,
@@ -2949,6 +3378,7 @@ You will receive confirmed trading signals here when available.`;
   }
 }
 
+
 // ============================================================
 // TELEGRAM OUTPUT
 // ============================================================
@@ -2956,7 +3386,43 @@ You will receive confirmed trading signals here when available.`;
 function formatTelegramSignal(
   signal
 ) {
-  return `🔥 CYBERFX SIGNAL
+  // ==========================================================
+  // REJECTION
+  // ==========================================================
+
+  if (
+    signal.status ===
+    "REJECTION"
+  ) {
+    const icon =
+      signal.direction === "BUY"
+        ? "🟢"
+        : "🔴";
+
+    return `${icon} ${signal.direction} REJECTION
+
+${signal.instrument}
+
+Entry TF: ${signal.entryTF}
+
+Rejection Level: ${signal.rejectionLevel}
+
+Current Price: ${signal.price}
+
+${signal.message}
+
+⚠️ DEVELOPING OPPORTUNITY`;
+  }
+
+  // ==========================================================
+  // VALID SETUP
+  // ==========================================================
+
+  if (
+    signal.status ===
+    "VALID SETUP"
+  ) {
+    return `🟡 CYBERFX VALID SETUP
 
 ${signal.instrument} — ${signal.direction}
 
@@ -2968,10 +3434,50 @@ Stop Loss: ${signal.stopLoss}
 
 Take Profit: ${signal.takeProfit}
 
-Risk/Reward: 1:6
+Risk/Reward: 1:3
+
+Setup:
+${signal.components?.length
+  ? signal.components
+      .map(x => `• ${x}`)
+      .join("\n")
+  : "• Developing structure"}
+
+⚠️ VALID SETUP — AWAITING FULL CONFIRMATION`;
+  }
+
+  // ==========================================================
+  // CONFIRMED
+  // ==========================================================
+
+  if (
+    signal.status ===
+    "CONFIRMED"
+  ) {
+    return `🔥 CYBERFX SIGNAL
+
+${signal.instrument} — ${signal.direction}
+
+Entry TF: ${signal.entryTF}
+
+Entry: ${signal.entry}
+
+Stop Loss: ${signal.stopLoss}
+
+Take Profit: ${signal.takeProfit}
+
+Risk/Reward: 1:3
 
 ✅ CONFIRMED`;
+  }
+
+  return `CYBERFX
+
+${signal.instrument}
+
+Status: ${signal.status}`;
 }
+
 
 // ============================================================
 // TELEGRAM API
@@ -3008,6 +3514,7 @@ async function sendTelegramMessage(
   return response.json();
 }
 
+
 // ============================================================
 // HELPERS
 // ============================================================
@@ -3027,12 +3534,14 @@ function average(
   );
 }
 
+
 function midpoint(
   a,
   b
 ) {
   return (a + b) / 2;
 }
+
 
 function priceInside(
   price,
@@ -3048,6 +3557,7 @@ function priceInside(
   );
 }
 
+
 function roundPrice(
   price
 ) {
@@ -3061,6 +3571,7 @@ function roundPrice(
     price.toFixed(2)
   );
 }
+
 
 function formatTF(
   tf
@@ -3076,8 +3587,9 @@ function formatTF(
   return names[tf] || tf;
 }
 
+
 // ============================================================
-// JSON RESPONSE
+// JSON
 // ============================================================
 
 function json(
@@ -3099,3 +3611,14 @@ function json(
     }
   );
 }
+
+
+// ============================================================
+// SIGNAL PRIORITY
+// ============================================================
+
+const SIGNAL_PRIORITY = {
+  "REJECTION": 1,
+  "VALID SETUP": 2,
+  "CONFIRMED": 3
+};
