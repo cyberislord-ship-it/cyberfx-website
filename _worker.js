@@ -11,7 +11,7 @@ export default {
       return json({
         success: true,
         engine: "CyberFX",
-        version: "2.0.0",
+        version: "2.0",
         status: "online",
         market_data: "Biquote",
         biquote_connected: biquoteConnected,
@@ -19,7 +19,7 @@ export default {
         paystack_connected: !!env.PAYSTACK_SECRET_KEY,
         database_connected: !!env.DB,
         risk_reward: "1:10",
-        trial_days: 21
+        trial_days: TRIAL_DAYS
       });
     }
 
@@ -31,6 +31,13 @@ export default {
       request.method === "POST"
     ) {
       try {
+        if (!env.DB) {
+          return json({
+            success: false,
+            error: "D1 database binding DB is missing"
+          }, 500);
+        }
+
         const body = await request.json();
 
         const email = String(body.email || "")
@@ -47,67 +54,9 @@ export default {
         const result = await startTrial(email, env);
 
         return json(result);
-      } catch (error) {
-        console.error("Trial error:", error);
-
-        return json({
-          success: false,
-          error: error?.message || String(error)
-        }, 500);
-      }
-    }
-
-    // =========================================================
-    // SUBSCRIPTION CHECK
-    // =========================================================
-    if (
-      url.pathname === "/api/subscription" &&
-      request.method === "GET"
-    ) {
-      try {
-        const email = String(
-          url.searchParams.get("email") || ""
-        )
-          .trim()
-          .toLowerCase();
-
-        if (!email) {
-          return json({
-            success: false,
-            error: "Email is required"
-          }, 400);
-        }
-
-        // Automatically create the trial if the user
-        // exists but has never received one.
-        await ensureTrialForUser(email, env);
-
-        const subscription =
-          await getActiveSubscriptionByEmail(email, env);
-
-        if (!subscription) {
-          return json({
-            success: true,
-            subscribed: false,
-            active: false,
-            trial: false
-          });
-        }
-
-        return json({
-          success: true,
-          subscribed: true,
-          active: true,
-          trial: subscription.plan === "trial",
-          plan: subscription.plan,
-          plan_name: subscription.plan_name,
-          email: subscription.email,
-          starts_at: subscription.starts_at,
-          expires_at: subscription.expires_at
-        });
 
       } catch (error) {
-        console.error("Subscription check error:", error);
+        console.error("Trial start error:", error);
 
         return json({
           success: false,
@@ -170,7 +119,7 @@ export default {
         const callbackUrl =
           `${url.origin}/api/payment/callback`;
 
-        const response = await fetch(
+        const paystackResponse = await fetch(
           "https://api.paystack.co/transaction/initialize",
           {
             method: "POST",
@@ -194,13 +143,18 @@ export default {
           }
         );
 
-        const result = await response.json();
+        const result = await paystackResponse.json();
 
         if (
-          !response.ok ||
+          !paystackResponse.ok ||
           !result.status ||
           !result.data
         ) {
+          console.error(
+            "Paystack initialize error:",
+            result
+          );
+
           return json({
             success: false,
             error:
@@ -249,7 +203,9 @@ export default {
 
         return json({
           success: false,
-          error: error?.message || String(error)
+          error:
+            error?.message ||
+            String(error)
         }, 500);
       }
     }
@@ -268,13 +224,18 @@ export default {
         if (!reference) {
           return json({
             success: false,
-            error: "Payment reference is required"
+            error:
+              "Payment reference is required"
           }, 400);
         }
 
-        return json(
-          await verifyPaystackPayment(reference, env)
-        );
+        const result =
+          await verifyPaystackPayment(
+            reference,
+            env
+          );
+
+        return json(result);
 
       } catch (error) {
         console.error(
@@ -284,7 +245,9 @@ export default {
 
         return json({
           success: false,
-          error: error?.message || String(error)
+          error:
+            error?.message ||
+            String(error)
         }, 500);
       }
     }
@@ -305,7 +268,8 @@ export default {
           {
             status: 400,
             headers: {
-              "content-type": "text/plain"
+              "content-type":
+                "text/plain"
             }
           }
         );
@@ -333,7 +297,12 @@ export default {
           302
         );
 
-      } catch {
+      } catch (error) {
+        console.error(
+          "Payment callback error:",
+          error
+        );
+
         return Response.redirect(
           `${url.origin}/?payment=failed`,
           302
@@ -342,28 +311,116 @@ export default {
     }
 
     // =========================================================
-    // MARKET SYMBOLS
+    // SUBSCRIPTION / TRIAL CHECK
     // =========================================================
     if (
-      url.pathname === "/api/symbols" &&
+      url.pathname === "/api/subscription" &&
       request.method === "GET"
     ) {
       try {
-        const symbols =
-          await discoverSymbols();
+        if (!env.DB) {
+          return json({
+            success: false,
+            error:
+              "D1 database binding DB is missing"
+          }, 500);
+        }
+
+        const email =
+          String(
+            url.searchParams.get("email") || ""
+          )
+            .trim()
+            .toLowerCase();
+
+        if (!email) {
+          return json({
+            success: false,
+            error: "Email is required"
+          }, 400);
+        }
+
+        /*
+         * If the account has no subscription,
+         * automatically create the 21-day trial.
+         */
+        await ensureTrialForUser(
+          email,
+          env
+        );
+
+        const subscription =
+          await getLatestSubscriptionByEmail(
+            email,
+            env
+          );
+
+        if (!subscription) {
+          return json({
+            success: true,
+            subscribed: false,
+            active: false,
+            trial_available: true
+          });
+        }
+
+        const expiry =
+          new Date(subscription.expires_at);
+
+        if (
+          subscription.status !== "active" ||
+          !Number.isFinite(expiry.getTime()) ||
+          expiry <= new Date()
+        ) {
+          await expireUserSubscription(
+            subscription.user_id,
+            env
+          );
+
+          return json({
+            success: true,
+            subscribed: false,
+            active: false,
+            expired: true,
+            status: "expired"
+          });
+        }
+
+        const isTrial =
+          subscription.plan === "trial";
 
         return json({
           success: true,
-          engine: "CyberFX",
-          source: "Biquote",
-          count: symbols.length,
-          symbols
+          subscribed: true,
+          active: true,
+          trial: isTrial,
+          plan: subscription.plan,
+          plan_name:
+            isTrial
+              ? "21-Day Free Trial"
+              : (
+                  PLANS[subscription.plan]?.name ||
+                  subscription.plan
+                ),
+          email:
+            subscription.email,
+          starts_at:
+            subscription.starts_at,
+          expires_at:
+            subscription.expires_at
         });
 
       } catch (error) {
+        console.error(
+          "Subscription check error:",
+          error
+        );
+
         return json({
           success: false,
-          error: error?.message || String(error)
+          error:
+            error?.message ||
+            String(error)
         }, 500);
       }
     }
@@ -373,33 +430,37 @@ export default {
     // =========================================================
     if (url.pathname === "/api/signals") {
       try {
-        const symbols =
-          await discoverSymbols();
-
         const data =
-          await loadAllMarkets(symbols);
+          await loadAllMarkets();
 
         return json({
           success: true,
           engine: "CyberFX",
+          version: "2.0",
           source: "Biquote",
-          risk_reward: "1:10",
-          markets: symbols,
-          timeframes: TIMEFRAMES.map(
-            x => x.name
-          ),
+          markets:
+            Object.keys(data),
+          timeframes:
+            TIMEFRAMES.map(
+              tf => tf.name
+            ),
+          sessions:
+            Object.keys(SESSIONS),
           data
         });
 
       } catch (error) {
         console.error(
-          "Market data error:",
+          "Biquote market data error:",
           error
         );
 
         return json({
           success: false,
-          error: error?.message || String(error)
+          engine: "CyberFX",
+          error:
+            error?.message ||
+            String(error)
         }, 500);
       }
     }
@@ -424,6 +485,7 @@ export default {
             "VALID SETUP",
             "CONFIRMED"
           ],
+          sessions: SESSIONS,
           signals: result
         });
 
@@ -435,7 +497,10 @@ export default {
 
         return json({
           success: false,
-          error: error?.message || String(error)
+          engine: "CyberFX",
+          error:
+            error?.message ||
+            String(error)
         }, 500);
       }
     }
@@ -482,7 +547,7 @@ export default {
   },
 
   // =========================================================
-  // CRON
+  // AUTOMATIC 15-MINUTE ENGINE
   // =========================================================
   async scheduled(event, env, ctx) {
     ctx.waitUntil(
@@ -493,22 +558,23 @@ export default {
 
 
 // ============================================================
-// OWNER
+// CYBERFX CONFIGURATION
 // ============================================================
 
 const OWNER_TELEGRAM_ID = "8368477940";
 
-
-// ============================================================
-// WEBSITE
-// ============================================================
-
 const WEBSITE_URL =
   "https://cyberfx-website.cybertradingsignal.workers.dev/";
 
+const TRIAL_DAYS = 21;
+
+const RISK_REWARD = 10;
+
+const CONFIRMED_SCORE = 13;
+
 
 // ============================================================
-// PAYMENTS
+// SUBSCRIPTION PLANS
 // ============================================================
 
 const PLANS = {
@@ -539,13 +605,6 @@ const PLANS = {
 
 
 // ============================================================
-// TRIAL
-// ============================================================
-
-const TRIAL_DAYS = 21;
-
-
-// ============================================================
 // TIMEFRAMES
 // ============================================================
 
@@ -568,21 +627,15 @@ const TIMEFRAMES = [
   {
     name: "4h",
     interval: "4h"
-  },
-
-  {
-    name: "1d",
-    interval: "1d"
   }
 ];
 
 const ENTRY_TIMEFRAMES = [
   "15min",
   "30min",
-  "1h"
+  "1h",
+  "4h"
 ];
-
-const CONFIRMED_SCORE = 13;
 
 
 // ============================================================
@@ -597,7 +650,53 @@ const SIGNAL_PRIORITY = {
 
 
 // ============================================================
-// Biquote HEALTH
+// TRADING SESSIONS
+// UTC WINDOWS
+// ============================================================
+
+const SESSIONS = {
+  SYDNEY: {
+    start: 21,
+    end: 6
+  },
+
+  ASIA: {
+    start: 0,
+    end: 9
+  },
+
+  LONDON: {
+    start: 7,
+    end: 16
+  },
+
+  NEW_YORK: {
+    start: 13,
+    end: 22
+  }
+};
+
+
+// ============================================================
+// BIAS / MARKET CATEGORIES
+// ============================================================
+
+const CATEGORY_NAMES = [
+  "forex",
+  "crypto",
+  "index",
+  "indices",
+  "commodity",
+  "commodities",
+  "stock",
+  "stocks",
+  "synthetic",
+  "synthetics"
+];
+
+
+// ============================================================
+// BIQUOTE HEALTH
 // ============================================================
 
 async function checkBiquote() {
@@ -608,6 +707,7 @@ async function checkBiquote() {
       );
 
     return response.ok;
+
   } catch {
     return false;
   }
@@ -615,310 +715,450 @@ async function checkBiquote() {
 
 
 // ============================================================
-// DYNAMIC SYMBOL DISCOVERY
+// BIQUOTE SYMBOL DISCOVERY
 // ============================================================
 
 async function discoverSymbols() {
-  const response =
-    await fetch(
-      "https://biquote.io/api/symbols?quotedWithinDays=7"
-    );
-
-  if (!response.ok) {
-    throw new Error(
-      "Unable to load Biquote symbol catalogue"
-    );
-  }
-
-  const result =
-    await response.json();
-
-  const symbols =
-    Array.isArray(result)
-      ? result
-      : result.symbols || [];
-
-  const wanted = [];
-
-  for (const item of symbols) {
-    const name =
-      String(
-        item.name ||
-        item.symbol ||
-        ""
-      ).toUpperCase();
-
-    const type =
-      String(
-        item.type ||
-        ""
-      ).toLowerCase();
-
-    const description =
-      String(
-        item.description ||
-        ""
-      ).toLowerCase();
-
-    if (!name) {
-      continue;
-    }
-
-    // --------------------------------------------------------
-    // FOREX
-    // --------------------------------------------------------
-
-    if (
-      type === "forex" &&
-      /^[A-Z]{6}$/.test(name)
-    ) {
-      wanted.push({
-        symbol: name,
-        name: name,
-        category: "FOREX",
-        description:
-          item.description || name,
-        source:
-          item.source || null
-      });
-
-      continue;
-    }
-
-    // --------------------------------------------------------
-    // CRYPTO
-    // --------------------------------------------------------
-
-    if (
-      type === "crypto" &&
-      (
-        name === "BTCUSD" ||
-        name.includes("BTC") ||
-        name.includes("ETH") ||
-        name.includes("SOL") ||
-        description.includes("bitcoin") ||
-        description.includes("ethereum")
-      )
-    ) {
-      wanted.push({
-        symbol: name,
-        name: name,
-        category: "CRYPTO",
-        description:
-          item.description || name,
-        source:
-          item.source || null
-      });
-
-      continue;
-    }
-
-    // --------------------------------------------------------
-    // INDEX
-    // --------------------------------------------------------
-
-    if (
-      type === "index" ||
-      type === "stock"
-    ) {
-      wanted.push({
-        symbol: name,
-        name: name,
-        category:
-          type === "index"
-            ? "INDEX"
-            : "STOCK",
-        description:
-          item.description || name,
-        source:
-          item.source || null
-      });
-
-      continue;
-    }
-
-    // --------------------------------------------------------
-    // COMMODITIES
-    // --------------------------------------------------------
-
-    if (
-      type === "commodity" ||
-      name === "XAUUSD" ||
-      name === "USOIL" ||
-      name === "UKOIL"
-    ) {
-      wanted.push({
-        symbol: name,
-        name: name,
-        category: "COMMODITY",
-        description:
-          item.description || name,
-        source:
-          item.source || null
-      });
-    }
-  }
-
-  // Always try to preserve the main CyberFX instruments
-  // if Biquote exposes them.
-  const priority =
-    [
-      "XAUUSD",
-      "BTCUSD",
-      "USTEC",
-      "NAS100",
-      "USOIL"
-    ];
-
-  wanted.sort((a, b) => {
-    const ai =
-      priority.indexOf(a.symbol);
-
-    const bi =
-      priority.indexOf(b.symbol);
-
-    if (ai === -1 && bi === -1) {
-      return a.symbol.localeCompare(
-        b.symbol
+  try {
+    const response =
+      await fetch(
+        "https://biquote.io/api/symbols"
       );
+
+    if (!response.ok) {
+      console.error(
+        "Biquote symbols request failed:",
+        response.status
+      );
+
+      return [];
     }
 
-    if (ai === -1) {
-      return 1;
+    const result =
+      await response.json();
+
+    let raw = [];
+
+    if (Array.isArray(result)) {
+      raw = result;
+    } else if (
+      Array.isArray(result.symbols)
+    ) {
+      raw = result.symbols;
+    } else if (
+      Array.isArray(result.data)
+    ) {
+      raw = result.data;
+    } else if (
+      Array.isArray(result.results)
+    ) {
+      raw = result.results;
     }
 
-    if (bi === -1) {
-      return -1;
-    }
+    return raw
+      .map(normalizeSymbolMetadata)
+      .filter(Boolean);
 
-    return ai - bi;
-  });
-
-  // Remove duplicates.
-  const unique =
-    new Map();
-
-  for (const item of wanted) {
-    unique.set(
-      item.symbol,
-      item
+  } catch (error) {
+    console.error(
+      "Symbol discovery error:",
+      error
     );
-  }
 
-  return [
-    ...unique.values()
-  ];
+    return [];
+  }
 }
 
 
 // ============================================================
-// CANDLES
+// SYMBOL METADATA NORMALIZER
+// ============================================================
+
+function normalizeSymbolMetadata(item) {
+  if (!item) {
+    return null;
+  }
+
+  if (typeof item === "string") {
+    return {
+      symbol: item,
+      name: item,
+      category: "unknown",
+      type: "unknown",
+      synthetic: false
+    };
+  }
+
+  const symbol =
+    String(
+      item.symbol ||
+      item.ticker ||
+      item.code ||
+      item.name ||
+      ""
+    ).trim();
+
+  if (!symbol) {
+    return null;
+  }
+
+  const category =
+    String(
+      item.category ||
+      item.asset_class ||
+      item.assetClass ||
+      item.market ||
+      item.group ||
+      ""
+    ).toLowerCase();
+
+  const type =
+    String(
+      item.type ||
+      item.instrument_type ||
+      item.instrumentType ||
+      ""
+    ).toLowerCase();
+
+  const name =
+    String(
+      item.name ||
+      item.description ||
+      symbol
+    );
+
+  const combined =
+    `${symbol} ${name} ${category} ${type}`
+      .toLowerCase();
+
+  const synthetic =
+    category.includes("synthetic") ||
+    type.includes("synthetic") ||
+    combined.includes("synthetic") ||
+    combined.includes("volatility") ||
+    combined.includes("boom") ||
+    combined.includes("crash") ||
+    combined.includes("step index") ||
+    combined.includes("jump index") ||
+    combined.includes("range break") ||
+    combined.includes("drift switch");
+
+  return {
+    symbol,
+    name,
+    category,
+    type,
+    synthetic
+  };
+}
+
+
+// ============================================================
+// MARKET FILTER
+// ============================================================
+
+function shouldTradeSymbol(metadata) {
+  if (!metadata) {
+    return false;
+  }
+
+  const combined =
+    `${metadata.symbol} ${metadata.name} ${metadata.category} ${metadata.type}`
+      .toLowerCase();
+
+  /*
+   * Exclude obvious non-trading catalogue entries.
+   */
+  if (
+    combined.includes("test") ||
+    combined.includes("demo") ||
+    combined.includes("deprecated")
+  ) {
+    return false;
+  }
+
+  /*
+   * Accept known market categories.
+   */
+  if (
+    CATEGORY_NAMES.some(
+      category =>
+        combined.includes(category)
+    )
+  ) {
+    return true;
+  }
+
+  /*
+   * Accept common FX symbols even when
+   * the provider doesn't provide category metadata.
+   */
+  if (
+    /^[A-Z]{6}$/.test(
+      metadata.symbol.replace("/", "")
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+
+// ============================================================
+// NORMALIZE SYMBOL FOR OHLC
+// ============================================================
+
+function providerSymbol(metadata) {
+  return String(
+    metadata?.symbol || ""
+  ).trim();
+}
+
+
+// ============================================================
+// BIQUOTE OHLC
 // ============================================================
 
 async function getCandles(
   symbol,
   interval
 ) {
-  const apiUrl =
-    new URL(
-      `https://biquote.io/api/${encodeURIComponent(symbol)}/ohlc`
+  try {
+    const apiUrl =
+      new URL(
+        `https://biquote.io/api/${encodeURIComponent(symbol)}/ohlc`
+      );
+
+    apiUrl.searchParams.set(
+      "interval",
+      interval
     );
 
-  apiUrl.searchParams.set(
-    "interval",
-    interval
-  );
+    apiUrl.searchParams.set(
+      "limit",
+      "200"
+    );
 
-  apiUrl.searchParams.set(
-    "limit",
-    "200"
-  );
+    const response =
+      await fetch(apiUrl);
 
-  const response =
-    await fetch(apiUrl);
+    const result =
+      await response.json();
 
-  const result =
-    await response.json();
+    if (
+      !response.ok ||
+      !Array.isArray(result.bars)
+    ) {
+      return {
+        status: "error",
+        symbol,
+        interval,
+        message:
+          result.message ||
+          result.error ||
+          "Biquote request failed"
+      };
+    }
 
-  if (
-    !response.ok ||
-    !Array.isArray(result.bars)
-  ) {
+    return {
+      status: "success",
+      symbol,
+      interval,
+      candles:
+        result.bars
+    };
+
+  } catch (error) {
     return {
       status: "error",
       symbol,
       interval,
       message:
-        result.message ||
-        result.error ||
-        "Biquote request failed"
+        error?.message ||
+        String(error)
     };
   }
-
-  return {
-    status: "success",
-    symbol,
-    interval,
-    candles:
-      result.bars
-  };
 }
 
 
 // ============================================================
-// LOAD MARKET
+// LOAD MARKETS DYNAMICALLY
 // ============================================================
 
-async function loadAllMarkets(symbols) {
-  const data = {};
+async function loadAllMarkets() {
+  const discovered =
+    await discoverSymbols();
 
-  // Keep requests controlled.
-  // Biquote supports these OHLC intervals directly.
+  const usable =
+    discovered.filter(
+      shouldTradeSymbol
+    );
+
+  const markets = {};
+
+  /*
+   * Fallback core markets.
+   * These are only used if the provider exposes
+   * these symbols directly through its OHLC endpoint.
+   */
+  const fallback = [
+    {
+      symbol: "EURUSD",
+      name: "EUR/USD",
+      category: "forex",
+      type: "forex",
+      synthetic: false
+    },
+
+    {
+      symbol: "GBPUSD",
+      name: "GBP/USD",
+      category: "forex",
+      type: "forex",
+      synthetic: false
+    },
+
+    {
+      symbol: "USDJPY",
+      name: "USD/JPY",
+      category: "forex",
+      type: "forex",
+      synthetic: false
+    },
+
+    {
+      symbol: "XAUUSD",
+      name: "XAU/USD",
+      category: "commodity",
+      type: "commodity",
+      synthetic: false
+    },
+
+    {
+      symbol: "BTCUSD",
+      name: "BTC/USD",
+      category: "crypto",
+      type: "crypto",
+      synthetic: false
+    },
+
+    {
+      symbol: "USTEC",
+      name: "NASDAQ",
+      category: "index",
+      type: "index",
+      synthetic: false
+    },
+
+    {
+      symbol: "USOIL",
+      name: "US OIL",
+      category: "commodity",
+      type: "commodity",
+      synthetic: false
+    }
+  ];
+
+  const merged =
+    mergeUniqueSymbols(
+      [...fallback, ...usable]
+    );
+
   for (
-    const item of symbols
+    const metadata of merged
   ) {
-    data[item.symbol] = {
-      metadata: item
+    if (
+      !shouldTradeSymbol(metadata)
+    ) {
+      continue;
+    }
+
+    const displayName =
+      metadata.name ||
+      metadata.symbol;
+
+    markets[displayName] = {
+      metadata,
+      symbol:
+        providerSymbol(metadata),
+      timeframes: {}
     };
 
     for (
       const tf of TIMEFRAMES
     ) {
-      data[item.symbol][tf.name] =
+      markets[displayName]
+        .timeframes[tf.name] =
         await getCandles(
-          item.symbol,
+          providerSymbol(metadata),
           tf.interval
         );
     }
   }
 
-  return data;
+  return markets;
 }
 
 
 // ============================================================
-// SIGNAL ENGINE
+// MERGE SYMBOLS
+// ============================================================
+
+function mergeUniqueSymbols(
+  list
+) {
+  const map =
+    new Map();
+
+  for (
+    const item of list
+  ) {
+    const normalized =
+      normalizeSymbolMetadata(
+        item
+      );
+
+    if (!normalized) {
+      continue;
+    }
+
+    const key =
+      normalized.symbol
+        .replace(
+          /[^A-Za-z0-9]/g,
+          ""
+        )
+        .toUpperCase();
+
+    if (!map.has(key)) {
+      map.set(
+        key,
+        normalized
+      );
+    }
+  }
+
+  return [
+    ...map.values()
+  ];
+}
+
+
+// ============================================================
+// GENERATE SIGNALS
 // ============================================================
 
 async function generateSignals() {
-  const symbols =
-    await discoverSymbols();
-
-  const marketData =
-    await loadAllMarkets(symbols);
+  const markets =
+    await loadAllMarkets();
 
   const results = [];
 
   for (
-    const item of symbols
+    const [instrument, market]
+    of Object.entries(markets)
   ) {
-    const market =
-      marketData[item.symbol];
-
-    if (!market) {
-      continue;
-    }
-
     const candidates = [];
 
     for (
@@ -927,25 +1167,43 @@ async function generateSignals() {
     ) {
       const result =
         analyzeInstrument(
-          item,
+          instrument,
           market,
           entryTF
         );
 
       if (result) {
-        candidates.push(result);
+        candidates.push(
+          result
+        );
       }
     }
 
     if (!candidates.length) {
+      results.push({
+        instrument,
+        symbol:
+          market.symbol,
+        market_type:
+          market.metadata?.category ||
+          "unknown",
+        synthetic:
+          !!market.metadata?.synthetic,
+        status: "NO SIGNAL"
+      });
+
       continue;
     }
 
     candidates.sort(
       (a, b) => {
         const quality =
-          SIGNAL_PRIORITY[b.status] -
-          SIGNAL_PRIORITY[a.status];
+          SIGNAL_PRIORITY[
+            b.status
+          ] -
+          SIGNAL_PRIORITY[
+            a.status
+          ];
 
         if (quality !== 0) {
           return quality;
@@ -972,21 +1230,40 @@ async function generateSignals() {
 
 
 // ============================================================
-// ANALYZE
+// TIMEFRAME PRIORITY
+// ============================================================
+
+function tfPriority(tf) {
+  const priority = {
+    "4h": 4,
+    "1h": 3,
+    "30min": 2,
+    "15min": 1
+  };
+
+  return priority[tf] || 0;
+}
+
+
+// ============================================================
+// ANALYZE INSTRUMENT
 // ============================================================
 
 function analyzeInstrument(
-  item,
+  instrument,
   market,
   entryTF
 ) {
   const entryData =
-    market[entryTF];
+    market.timeframes?.[entryTF];
 
   if (
     !entryData ||
     entryData.status !== "success" ||
-    !Array.isArray(entryData.candles)
+    !Array.isArray(
+      entryData.candles
+    ) ||
+    entryData.candles.length < 30
   ) {
     return null;
   }
@@ -994,37 +1271,46 @@ function analyzeInstrument(
   const candles =
     normalizeCandles(
       entryData.candles
-    ).filter(
+    );
+
+  const closed =
+    candles.filter(
       c => !c.isOpen
     );
 
-  if (candles.length < 40) {
+  if (closed.length < 30) {
     return null;
   }
 
   const current =
-    candles[
-      candles.length - 1
+    closed[
+      closed.length - 1
     ];
 
+  /*
+   * 4H + 1H establish the normal HTF bias.
+   */
   const htfBias =
     determineHTFBias(
-      market
+      market.timeframes
     );
 
   const structure =
     detectStructure(
-      candles
+      closed
     );
 
   const rejection =
     detectRejection(
-      candles,
+      closed,
       structure
     );
 
   let bestResult = null;
 
+  /*
+   * Rejection is an early/developing signal.
+   */
   if (
     rejection &&
     (
@@ -1034,7 +1320,8 @@ function analyzeInstrument(
   ) {
     bestResult =
       buildRejectionSignal(
-        item,
+        instrument,
+        market,
         entryTF,
         rejection,
         htfBias,
@@ -1044,18 +1331,18 @@ function analyzeInstrument(
 
   const accumulation =
     detectAccumulation(
-      candles
+      closed
     );
 
   const crt =
     detectCRT(
-      candles,
+      closed,
       accumulation
     );
 
   const sweep =
     detectLiquiditySweep(
-      candles,
+      closed,
       crt,
       structure
     );
@@ -1074,13 +1361,13 @@ function analyzeInstrument(
 
   const displacement =
     detectDisplacement(
-      candles,
+      closed,
       sweep
     );
 
   const structureBreak =
     detectBOSMSS(
-      candles,
+      closed,
       structure,
       displacement
     );
@@ -1098,12 +1385,13 @@ function analyzeInstrument(
     );
 
   if (validSetup) {
-    const setup =
+    const setupSignal =
       buildValidSetupSignal(
-        item,
+        instrument,
+        market,
         entryTF,
         direction,
-        candles,
+        closed,
         sweep,
         structure,
         crt,
@@ -1114,17 +1402,25 @@ function analyzeInstrument(
       );
 
     if (
-      setup &&
+      setupSignal &&
       (
         !bestResult ||
-        SIGNAL_PRIORITY[setup.status] >
-        SIGNAL_PRIORITY[bestResult.status]
+        SIGNAL_PRIORITY[
+          setupSignal.status
+        ] >
+        SIGNAL_PRIORITY[
+          bestResult.status
+        ]
       )
     ) {
-      bestResult = setup;
+      bestResult =
+        setupSignal;
     }
   }
 
+  /*
+   * Full confirmation requirements.
+   */
   if (
     !crt ||
     !sweep ||
@@ -1143,7 +1439,7 @@ function analyzeInstrument(
 
   const impulse =
     getImpulseLeg(
-      candles,
+      closed,
       structureBreak,
       sweep
     );
@@ -1160,20 +1456,20 @@ function analyzeInstrument(
 
   const orderBlock =
     findOrderBlock(
-      candles,
+      closed,
       displacement,
       structureBreak
     );
 
   const fvg =
     findFVG(
-      candles,
+      closed,
       displacement
     );
 
   const pullback =
     validatePullback(
-      candles,
+      closed,
       impulse,
       fib,
       orderBlock,
@@ -1204,7 +1500,7 @@ function analyzeInstrument(
       structureBreak.direction,
       sweep,
       orderBlock,
-      candles
+      closed
     );
 
   if (!stopLoss) {
@@ -1220,14 +1516,13 @@ function analyzeInstrument(
     return bestResult;
   }
 
-  // ========================================================
-  // FINAL RR = 1:10
-  // ========================================================
-
+  /*
+   * FINAL RR = 1:10
+   */
   const takeProfit =
     structureBreak.direction === "bullish"
-      ? entry + risk * 10
-      : entry - risk * 10;
+      ? entry + risk * RISK_REWARD
+      : entry - risk * RISK_REWARD;
 
   const score =
     calculateScore({
@@ -1253,19 +1548,22 @@ function analyzeInstrument(
     );
 
   return {
-    instrument: item.name || item.symbol,
-    symbol: item.symbol,
-    category: item.category,
+    instrument,
+
+    symbol:
+      market.symbol,
+
+    marketType:
+      market.metadata?.category ||
+      "unknown",
+
+    synthetic:
+      !!market.metadata?.synthetic,
 
     direction:
       structureBreak.direction === "bullish"
         ? "BUY"
         : "SELL",
-
-    orderType:
-      structureBreak.direction === "bullish"
-        ? "BUY LIMIT"
-        : "SELL LIMIT",
 
     entryTF:
       formatTF(entryTF),
@@ -1288,18 +1586,18 @@ function analyzeInstrument(
 
     label:
       structureBreak.direction === "bullish"
-        ? "🟢 CYBERFX A+ BUY"
-        : "🟢 CYBERFX A+ SELL",
+        ? "🟢 A+ CONFIRMED BUY"
+        : "🟢 A+ CONFIRMED SELL",
 
     session:
 
       session.name,
 
+    sessionStatus:
+      session.status,
+
     signalTime:
       current.time,
-
-    message:
-      "GOD OVER MAN",
 
     internal: {
       score,
@@ -1313,6 +1611,7 @@ function analyzeInstrument(
       fvg,
       fib,
       pullback,
+      session,
       signalCandleTime:
         current.time
     }
@@ -1366,10 +1665,9 @@ function detectRejection(
     current.low;
 
   const closeLocation =
-    (
-      current.close -
-      current.low
-    ) / range;
+    (current.close -
+      current.low) /
+    range;
 
   const atr =
     ATR(candles);
@@ -1464,7 +1762,7 @@ function detectRejection(
 
 
 // ============================================================
-// DIRECTION
+// DEVELOPING DIRECTION
 // ============================================================
 
 function determineDevelopingDirection(
@@ -1571,11 +1869,100 @@ function detectValidSetup(
 
 
 // ============================================================
-// VALID SETUP OUTPUT
+// REJECTION SIGNAL
+// ============================================================
+
+function buildRejectionSignal(
+  instrument,
+  market,
+  entryTF,
+  rejection,
+  htfBias,
+  current
+) {
+  const direction =
+    rejection.direction === "bullish"
+      ? "BUY"
+      : "SELL";
+
+  const session =
+    getTradingSession(
+      current.time
+    );
+
+  return {
+    instrument,
+
+    symbol:
+      market.symbol,
+
+    marketType:
+      market.metadata?.category ||
+      "unknown",
+
+    synthetic:
+      !!market.metadata?.synthetic,
+
+    direction,
+
+    entryTF:
+      formatTF(entryTF),
+
+    entryTFRaw:
+      entryTF,
+
+    status: "REJECTION",
+
+    label:
+      direction === "BUY"
+        ? "🟢 BUY REJECTION"
+        : "🔴 SELL REJECTION",
+
+    rejectionLevel:
+      roundPrice(
+        rejection.level
+      ),
+
+    price:
+      roundPrice(
+        current.close
+      ),
+
+    session:
+      session.name,
+
+    sessionStatus:
+      session.status,
+
+    signalTime:
+      current.time,
+
+    rejectionReason:
+      rejection.reason,
+
+    message:
+      direction === "BUY"
+        ? "Price rejected the level and closed back above it."
+        : "Price rejected the level and closed back below it.",
+
+    internal: {
+      htfBias,
+      rejection,
+      session,
+      signalCandleTime:
+        current.time
+    }
+  };
+}
+
+
+// ============================================================
+// VALID SETUP SIGNAL
 // ============================================================
 
 function buildValidSetupSignal(
-  item,
+  instrument,
+  market,
   entryTF,
   direction,
   candles,
@@ -1592,20 +1979,24 @@ function buildValidSetupSignal(
       candles.length - 1
     ];
 
+  let entry =
+    current.close;
+
+  if (rejection?.level) {
+    entry =
+      rejection.level;
+  }
+
+  if (sweep?.level) {
+    entry =
+      sweep.level;
+  }
+
   const atr =
     ATR(candles);
 
   if (!atr) {
     return null;
-  }
-
-  let entry =
-    current.close;
-
-  if (sweep?.level) {
-    entry = sweep.level;
-  } else if (rejection?.level) {
-    entry = rejection.level;
   }
 
   let stopLoss;
@@ -1639,29 +2030,41 @@ function buildValidSetupSignal(
 
   const takeProfit =
     direction === "bullish"
-      ? entry + risk * 10
-      : entry - risk * 10;
+      ? entry + risk * RISK_REWARD
+      : entry - risk * RISK_REWARD;
 
   const components = [];
 
   if (htfBias === direction) {
-    components.push("HTF Bias");
+    components.push(
+      "HTF Bias"
+    );
   }
 
-  if (structure?.direction === direction) {
-    components.push("Structure");
+  if (
+    structure?.direction === direction
+  ) {
+    components.push(
+      "Market Structure"
+    );
   }
 
   if (rejection) {
-    components.push("Rejection");
+    components.push(
+      "Rejection"
+    );
   }
 
   if (sweep) {
-    components.push("Liquidity Sweep");
+    components.push(
+      "Liquidity Sweep"
+    );
   }
 
   if (displacement) {
-    components.push("Displacement");
+    components.push(
+      "Displacement"
+    );
   }
 
   if (structureBreak) {
@@ -1671,28 +2074,33 @@ function buildValidSetupSignal(
   }
 
   if (crt) {
-    components.push("CRT");
+    components.push(
+      "CRT"
+    );
   }
 
+  const session =
+    getTradingSession(
+      current.time
+    );
+
   return {
-    instrument:
-      item.name || item.symbol,
+    instrument,
 
     symbol:
-      item.symbol,
+      market.symbol,
 
-    category:
-      item.category,
+    marketType:
+      market.metadata?.category ||
+      "unknown",
+
+    synthetic:
+      !!market.metadata?.synthetic,
 
     direction:
       direction === "bullish"
         ? "BUY"
         : "SELL",
-
-    orderType:
-      direction === "bullish"
-        ? "BUY LIMIT"
-        : "SELL LIMIT",
 
     entryTF:
       formatTF(entryTF),
@@ -1709,30 +2117,148 @@ function buildValidSetupSignal(
     takeProfit:
       roundPrice(takeProfit),
 
-    riskReward: "1:10",
+    riskReward:
+      "1:10",
 
-    status: "VALID SETUP",
+    status:
+      "VALID SETUP",
 
     label:
       direction === "bullish"
-        ? "🟡 CYBERFX VALID BUY SETUP"
-        : "🟡 CYBERFX VALID SELL SETUP",
+        ? "🟡 VALID BUY SETUP"
+        : "🟡 VALID SELL SETUP",
 
     components,
+
+    session:
+      session.name,
+
+    sessionStatus:
+      session.status,
 
     signalTime:
       current.time,
 
-    session:
-      getTradingSession(
+    internal: {
+      htfBias,
+      crt,
+      sweep,
+      displacement,
+      structureBreak,
+      rejection,
+      session,
+      signalCandleTime:
         current.time
-      ).name
+    }
   };
 }
 
 
 // ============================================================
-// STRUCTURE
+// NORMALIZE CANDLES
+// ============================================================
+
+function normalizeCandles(
+  values
+) {
+  return values
+    .map(c => ({
+      time:
+        c.openTime ||
+        c.timestamp ||
+        c.time,
+
+      open:
+        Number(c.open),
+
+      high:
+        Number(c.high),
+
+      low:
+        Number(c.low),
+
+      close:
+        Number(c.close),
+
+      volume:
+        Number(c.volume || 0),
+
+      tickVolume:
+        Number(
+          c.tickVolume || 0
+        ),
+
+      isOpen:
+        Boolean(c.isOpen)
+    }))
+    .filter(c =>
+      Number.isFinite(c.open) &&
+      Number.isFinite(c.high) &&
+      Number.isFinite(c.low) &&
+      Number.isFinite(c.close)
+    )
+    .sort(
+      (a, b) =>
+        new Date(a.time) -
+        new Date(b.time)
+    );
+}
+
+
+// ============================================================
+// ATR
+// ============================================================
+
+function ATR(
+  candles,
+  period = 14
+) {
+  if (
+    candles.length <
+    period + 1
+  ) {
+    return 0;
+  }
+
+  const ranges = [];
+
+  for (
+    let i =
+      candles.length - period;
+    i < candles.length;
+    i++
+  ) {
+    const current =
+      candles[i];
+
+    const previous =
+      candles[i - 1];
+
+    const tr =
+      Math.max(
+        current.high -
+          current.low,
+
+        Math.abs(
+          current.high -
+            previous.close
+        ),
+
+        Math.abs(
+          current.low -
+            previous.close
+        )
+      );
+
+    ranges.push(tr);
+  }
+
+  return average(ranges);
+}
+
+
+// ============================================================
+// MARKET STRUCTURE
 // ============================================================
 
 function detectStructure(
@@ -1758,7 +2284,8 @@ function detectStructure(
     ) {
       highs.push({
         index: i,
-        price: candles[i].high
+        price:
+          candles[i].high
       });
     }
 
@@ -1774,7 +2301,8 @@ function detectStructure(
     ) {
       lows.push({
         index: i,
-        price: candles[i].low
+        price:
+          candles[i].low
       });
     }
   }
@@ -1791,16 +2319,24 @@ function detectStructure(
   }
 
   const h1 =
-    highs[highs.length - 2];
+    highs[
+      highs.length - 2
+    ];
 
   const h2 =
-    highs[highs.length - 1];
+    highs[
+      highs.length - 1
+    ];
 
   const l1 =
-    lows[lows.length - 2];
+    lows[
+      lows.length - 2
+    ];
 
   const l2 =
-    lows[lows.length - 1];
+    lows[
+      lows.length - 1
+    ];
 
   if (
     h2.price > h1.price &&
@@ -1834,18 +2370,21 @@ function detectStructure(
 
 // ============================================================
 // HTF BIAS
-// 4H + 1H
-// D1 ONLY FOR FRIDAY/WEEKEND CONTEXT
 // ============================================================
 
 function determineHTFBias(
   market
 ) {
+  const frames = [
+    "4h",
+    "1h"
+  ];
+
   let bullish = 0;
   let bearish = 0;
 
   for (
-    const tf of ["4h", "1h"]
+    const tf of frames
   ) {
     const data =
       market[tf];
@@ -1874,15 +2413,13 @@ function determineHTFBias(
       );
 
     if (
-      structure.direction ===
-      "bullish"
+      structure.direction === "bullish"
     ) {
       bullish++;
     }
 
     if (
-      structure.direction ===
-      "bearish"
+      structure.direction === "bearish"
     ) {
       bearish++;
     }
@@ -1918,13 +2455,16 @@ function detectAccumulation(
   const lookback = 12;
 
   if (
-    candles.length < lookback
+    candles.length <
+    lookback
   ) {
     return null;
   }
 
   const recent =
-    candles.slice(-lookback);
+    candles.slice(
+      -lookback
+    );
 
   const high =
     Math.max(
@@ -1949,6 +2489,41 @@ function detectAccumulation(
   if (
     !atr ||
     range > atr * 2
+  ) {
+    return null;
+  }
+
+  let upperTouches = 0;
+  let lowerTouches = 0;
+
+  const tolerance =
+    range * 0.15;
+
+  for (
+    const candle of recent
+  ) {
+    if (
+      Math.abs(
+        candle.high -
+        high
+      ) <= tolerance
+    ) {
+      upperTouches++;
+    }
+
+    if (
+      Math.abs(
+        candle.low -
+        low
+      ) <= tolerance
+    ) {
+      lowerTouches++;
+    }
+  }
+
+  if (
+    upperTouches < 2 &&
+    lowerTouches < 2
   ) {
     return null;
   }
@@ -2004,7 +2579,10 @@ function detectCRT(
       reference.low,
 
     time:
-      reference.time
+      reference.time,
+
+    accumulation:
+      !!accumulation
   };
 }
 
@@ -2053,7 +2631,9 @@ function detectLiquiditySweep(
     };
   }
 
-  if (structure?.lows?.length) {
+  if (
+    structure?.lows?.length
+  ) {
     const swingLow =
       structure.lows[
         structure.lows.length - 1
@@ -2067,13 +2647,16 @@ function detectLiquiditySweep(
     ) {
       return {
         direction: "bullish",
-        level: swingLow.price,
+        level:
+          swingLow.price,
         candle: current
       };
     }
   }
 
-  if (structure?.highs?.length) {
+  if (
+    structure?.highs?.length
+  ) {
     const swingHigh =
       structure.highs[
         structure.highs.length - 1
@@ -2087,7 +2670,8 @@ function detectLiquiditySweep(
     ) {
       return {
         direction: "bearish",
-        level: swingHigh.price,
+        level:
+          swingHigh.price,
         candle: current
       };
     }
@@ -2115,7 +2699,10 @@ function detectDisplacement(
     ];
 
   const previous10 =
-    candles.slice(-11, -1);
+    candles.slice(
+      -11,
+      -1
+    );
 
   if (
     previous10.length < 10
@@ -2152,14 +2739,21 @@ function detectDisplacement(
     body / range;
 
   const closeLocation =
-    (
-      current.close -
-      current.low
-    ) / range;
+    (current.close -
+      current.low) /
+    range;
+
+  const bullish =
+    current.close >
+    current.open;
+
+  const bearish =
+    current.close <
+    current.open;
 
   if (
     sweep.direction === "bullish" &&
-    current.close > current.open &&
+    bullish &&
     closeLocation >= 0.75 &&
     body >= averageBody * 1.5 &&
     bodyRatio >= 0.60
@@ -2174,7 +2768,7 @@ function detectDisplacement(
 
   if (
     sweep.direction === "bearish" &&
-    current.close < current.open &&
+    bearish &&
     closeLocation <= 0.25 &&
     body >= averageBody * 1.5 &&
     bodyRatio >= 0.60
@@ -2213,8 +2807,7 @@ function detectBOSMSS(
     ];
 
   if (
-    displacement.direction ===
-    "bullish"
+    displacement.direction === "bullish"
   ) {
     const previousHigh =
       structure.highs[
@@ -2228,11 +2821,12 @@ function detectBOSMSS(
     ) {
       return {
         direction: "bullish",
+
         type:
-          structure.direction ===
-          "bearish"
+          structure.direction === "bearish"
             ? "MSS"
             : "BOS",
+
         level:
           previousHigh.price
       };
@@ -2240,8 +2834,7 @@ function detectBOSMSS(
   }
 
   if (
-    displacement.direction ===
-    "bearish"
+    displacement.direction === "bearish"
   ) {
     const previousLow =
       structure.lows[
@@ -2255,11 +2848,12 @@ function detectBOSMSS(
     ) {
       return {
         direction: "bearish",
+
         type:
-          structure.direction ===
-          "bullish"
+          structure.direction === "bullish"
             ? "MSS"
             : "BOS",
+
         level:
           previousLow.price
       };
@@ -2287,8 +2881,7 @@ function getImpulseLeg(
   }
 
   if (
-    structureBreak.direction ===
-    "bullish"
+    structureBreak.direction === "bullish"
   ) {
     return {
       direction: "bullish",
@@ -2400,30 +2993,34 @@ function findOrderBlock(
       candles[i];
 
     if (
-      structureBreak.direction ===
-      "bullish" &&
+      structureBreak.direction === "bullish" &&
       candle.close <
         candle.open
     ) {
       return {
         direction: "bullish",
-        high: candle.high,
-        low: candle.low,
-        time: candle.time
+        high:
+          candle.high,
+        low:
+          candle.low,
+        time:
+          candle.time
       };
     }
 
     if (
-      structureBreak.direction ===
-      "bearish" &&
+      structureBreak.direction === "bearish" &&
       candle.close >
         candle.open
     ) {
       return {
         direction: "bearish",
-        high: candle.high,
-        low: candle.low,
-        time: candle.time
+        high:
+          candle.high,
+        low:
+          candle.low,
+        time:
+          candle.time
       };
     }
   }
@@ -2462,8 +3059,7 @@ function findFVG(
     candles[i];
 
   if (
-    displacement.direction ===
-    "bullish" &&
+    displacement.direction === "bullish" &&
     c1.high < c3.low
   ) {
     return {
@@ -2474,8 +3070,7 @@ function findFVG(
   }
 
   if (
-    displacement.direction ===
-    "bearish" &&
+    displacement.direction === "bearish" &&
     c1.low > c3.high
   ) {
     return {
@@ -2490,7 +3085,7 @@ function findFVG(
 
 
 // ============================================================
-// PULLBACK
+// HEALTHY PULLBACK
 // ============================================================
 
 function validatePullback(
@@ -2616,10 +3211,12 @@ function determineEntry(
   candidates.sort(
     (a, b) =>
       Math.abs(
-        a - currentPrice
+        a -
+        currentPrice
       ) -
       Math.abs(
-        b - currentPrice
+        b -
+        currentPrice
       )
   );
 
@@ -2652,7 +3249,8 @@ function determineStopLoss(
   ) {
     sl =
       sweep
-        ? sweep.level - atr * 0.10
+        ? sweep.level -
+          atr * 0.10
         : entry - atr;
 
     if (
@@ -2667,10 +3265,12 @@ function determineStopLoss(
     if (sl >= entry) {
       return null;
     }
+
   } else {
     sl =
       sweep
-        ? sweep.level + atr * 0.10
+        ? sweep.level +
+          atr * 0.10
         : entry + atr;
 
     if (
@@ -2753,112 +3353,7 @@ function calculateScore(x) {
 
 
 // ============================================================
-// ATR
-// ============================================================
-
-function ATR(
-  candles,
-  period = 14
-) {
-  if (
-    candles.length <
-    period + 1
-  ) {
-    return 0;
-  }
-
-  const ranges = [];
-
-  for (
-    let i =
-      candles.length - period;
-    i < candles.length;
-    i++
-  ) {
-    const current =
-      candles[i];
-
-    const previous =
-      candles[i - 1];
-
-    if (!previous) {
-      continue;
-    }
-
-    ranges.push(
-      Math.max(
-        current.high -
-          current.low,
-
-        Math.abs(
-          current.high -
-            previous.close
-        ),
-
-        Math.abs(
-          current.low -
-            previous.close
-        )
-      )
-    );
-  }
-
-  return average(ranges);
-}
-
-
-// ============================================================
-// CANDLE NORMALIZATION
-// ============================================================
-
-function normalizeCandles(
-  values
-) {
-  return values
-    .map(c => ({
-      time:
-        c.openTime ||
-        c.timestamp ||
-        c.time,
-
-      open:
-        Number(c.open),
-
-      high:
-        Number(c.high),
-
-      low:
-        Number(c.low),
-
-      close:
-        Number(c.close),
-
-      volume:
-        Number(c.volume || 0),
-
-      tickVolume:
-        Number(c.tickVolume || 0),
-
-      isOpen:
-        Boolean(c.isOpen)
-    }))
-    .filter(c =>
-      Number.isFinite(c.open) &&
-      Number.isFinite(c.high) &&
-      Number.isFinite(c.low) &&
-      Number.isFinite(c.close)
-    )
-    .sort(
-      (a, b) =>
-        new Date(a.time) -
-        new Date(b.time)
-    );
-}
-
-
-// ============================================================
-// TRADING SESSIONS
-// UTC
+// SESSION ENGINE
 // ============================================================
 
 function getTradingSession(
@@ -2867,194 +3362,142 @@ function getTradingSession(
   const date =
     new Date(time);
 
+  if (
+    !Number.isFinite(
+      date.getTime()
+    )
+  ) {
+    return {
+      name: "UNKNOWN",
+      status: "UNKNOWN"
+    };
+  }
+
   const hour =
     date.getUTCHours();
 
-  if (
-    hour >= 21 ||
-    hour < 6
+  const matches = [];
+
+  for (
+    const [name, session]
+    of Object.entries(SESSIONS)
   ) {
+    let active = false;
+
+    if (
+      session.start <
+      session.end
+    ) {
+      active =
+        hour >= session.start &&
+        hour < session.end;
+    } else {
+      active =
+        hour >= session.start ||
+        hour < session.end;
+    }
+
+    if (active) {
+      matches.push(
+        name
+      );
+    }
+  }
+
+  if (!matches.length) {
     return {
-      name: "Sydney"
+      name: "OFF SESSION",
+      status: "CLOSED",
+      hourUTC: hour
     };
   }
 
+  /*
+   * When London/New York overlap,
+   * New York gets priority.
+   */
   if (
-    hour >= 0 &&
-    hour < 9
+    matches.includes("NEW_YORK") &&
+    matches.includes("LONDON")
   ) {
     return {
-      name: "Asia"
-    };
-  }
-
-  if (
-    hour >= 7 &&
-    hour < 16
-  ) {
-    return {
-      name: "London"
-    };
-  }
-
-  if (
-    hour >= 12 &&
-    hour < 21
-  ) {
-    return {
-      name: "New York"
+      name: "NEW YORK / LONDON OVERLAP",
+      status: "ACTIVE",
+      hourUTC: hour
     };
   }
 
   return {
-    name: "Global"
+    name: matches[0],
+    status: "ACTIVE",
+    hourUTC: hour
   };
 }
 
 
 // ============================================================
-// TRIAL SYSTEM
+// SESSION OPENING NOTIFICATION
 // ============================================================
 
-async function startTrial(
-  email,
-  env
+function getSessionOpeningMessage(
+  date = new Date()
 ) {
-  if (!env.DB) {
-    return {
-      success: false,
-      error:
-        "D1 database binding DB is missing"
-    };
+  const hour =
+    date.getUTCHours();
+
+  const minute =
+    date.getUTCMinutes();
+
+  const currentMinutes =
+    hour * 60 +
+    minute;
+
+  const sessions = [
+    {
+      name: "SYDNEY",
+      open: 21 * 60
+    },
+
+    {
+      name: "ASIA",
+      open: 0
+    },
+
+    {
+      name: "LONDON",
+      open: 7 * 60
+    },
+
+    {
+      name: "NEW YORK",
+      open: 13 * 60
+    }
+  ];
+
+  for (
+    const session of sessions
+  ) {
+    const difference =
+      (
+        session.open -
+        currentMinutes +
+        1440
+      ) %
+      1440;
+
+    if (
+      difference <= 15
+    ) {
+      return {
+        session:
+          session.name,
+        minutesUntilOpen:
+          difference
+      };
+    }
   }
 
-  const user =
-    await env.DB.prepare(`
-      SELECT id, email
-      FROM users
-      WHERE email = ?
-      LIMIT 1
-    `)
-      .bind(email)
-      .first();
-
-  if (!user) {
-    return {
-      success: false,
-      error:
-        "User account not found. Register first."
-    };
-  }
-
-  const existing =
-    await env.DB.prepare(`
-      SELECT id, plan, starts_at, expires_at, status
-      FROM subscriptions
-      WHERE user_id = ?
-      ORDER BY id DESC
-      LIMIT 1
-    `)
-      .bind(user.id)
-      .first();
-
-  if (existing) {
-    return {
-      success: true,
-      already_started: true,
-      plan: existing.plan,
-      starts_at: existing.starts_at,
-      expires_at: existing.expires_at,
-      status: existing.status
-    };
-  }
-
-  const start =
-    new Date();
-
-  const expiry =
-    new Date(
-      start.getTime() +
-      TRIAL_DAYS *
-      24 *
-      60 *
-      60 *
-      1000
-    );
-
-  await env.DB.prepare(`
-    INSERT INTO subscriptions (
-      user_id,
-      plan,
-      paystack_reference,
-      status,
-      starts_at,
-      expires_at
-    )
-    VALUES (?, ?, ?, ?, ?, ?)
-  `)
-    .bind(
-      user.id,
-      "trial",
-      null,
-      "active",
-      start.toISOString(),
-      expiry.toISOString()
-    )
-    .run();
-
-  return {
-    success: true,
-    trial: true,
-    plan: "trial",
-    plan_name: "21-Day Free Trial",
-    starts_at:
-      start.toISOString(),
-    expires_at:
-      expiry.toISOString(),
-    trial_days:
-      TRIAL_DAYS
-  };
-}
-
-
-async function ensureTrialForUser(
-  email,
-  env
-) {
-  if (!env.DB) {
-    return;
-  }
-
-  const user =
-    await env.DB.prepare(`
-      SELECT id
-      FROM users
-      WHERE email = ?
-      LIMIT 1
-    `)
-      .bind(email)
-      .first();
-
-  if (!user) {
-    return;
-  }
-
-  const existing =
-    await env.DB.prepare(`
-      SELECT id
-      FROM subscriptions
-      WHERE user_id = ?
-      LIMIT 1
-    `)
-      .bind(user.id)
-      .first();
-
-  if (!existing) {
-    await startTrial(
-      email,
-      env
-    );
-  }
+  return null;
 }
 
 
@@ -3099,7 +3542,8 @@ async function verifyPaystackPayment(
   ) {
     return {
       success: false,
-      payment_status: "failed",
+      payment_status:
+        "failed",
       error:
         result.message ||
         "Unable to verify payment"
@@ -3152,34 +3596,50 @@ async function verifyPaystackPayment(
   if (!payment) {
     return {
       success: false,
-      payment_status: "failed",
+      payment_status:
+        "failed",
       error:
         "Payment record not found"
     };
   }
 
-  if (!PLANS[payment.plan]) {
+  const plan =
+    payment.plan;
+
+  if (!PLANS[plan]) {
     return {
       success: false,
-      payment_status: "failed",
+      payment_status:
+        "failed",
       error:
         "Invalid CyberFX plan"
     };
   }
 
   const selectedPlan =
-    PLANS[payment.plan];
+    PLANS[plan];
 
   if (
     Number(transaction.amount) !==
     Number(selectedPlan.amount)
   ) {
+    await env.DB.prepare(`
+      UPDATE payments
+      SET status = ?
+      WHERE reference = ?
+    `)
+      .bind(
+        "amount_mismatch",
+        reference
+      )
+      .run();
+
     return {
       success: false,
       payment_status:
         "amount_mismatch",
       error:
-        "Payment amount does not match the selected plan"
+        "Payment amount does not match selected plan"
     };
   }
 
@@ -3191,6 +3651,19 @@ async function verifyPaystackPayment(
     )
       .trim()
       .toLowerCase();
+
+  if (!email) {
+    return {
+      success: false,
+      payment_status:
+        "failed",
+      error:
+        "Customer email not found"
+    };
+  }
+
+  const now =
+    new Date();
 
   const user =
     await env.DB.prepare(`
@@ -3205,15 +3678,16 @@ async function verifyPaystackPayment(
   if (!user) {
     return {
       success: false,
-      payment_status: "failed",
+      payment_status:
+        "failed",
       error:
         "User account not found. Register on CyberFX before paying."
     };
   }
 
-  const now =
-    new Date();
-
+  /*
+   * Find current subscription.
+   */
   const existing =
     await env.DB.prepare(`
       SELECT
@@ -3230,13 +3704,16 @@ async function verifyPaystackPayment(
       .bind(user.id)
       .first();
 
-  // Paid subscription starts immediately unless
-  // the user already has a currently active subscription.
-  let startDate = now;
+  let startDate =
+    now;
 
+  /*
+   * If a paid subscription is still active,
+   * extend from its expiry.
+   */
   if (
-    existing?.expires_at &&
-    existing.status === "active"
+    existing?.status === "active" &&
+    existing?.expires_at
   ) {
     const expiry =
       new Date(
@@ -3247,7 +3724,8 @@ async function verifyPaystackPayment(
       Number.isFinite(
         expiry.getTime()
       ) &&
-      expiry > now
+      expiry > now &&
+      existing.plan !== "trial"
     ) {
       startDate =
         expiry;
@@ -3274,6 +3752,10 @@ async function verifyPaystackPayment(
     )
     .run();
 
+  /*
+   * Convert the trial into paid access
+   * rather than leaving the trial active.
+   */
   if (existing?.id) {
     await env.DB.prepare(`
       UPDATE subscriptions
@@ -3286,7 +3768,7 @@ async function verifyPaystackPayment(
       WHERE id = ?
     `)
       .bind(
-        payment.plan,
+        plan,
         reference,
         "active",
         startDate.toISOString(),
@@ -3294,6 +3776,7 @@ async function verifyPaystackPayment(
         existing.id
       )
       .run();
+
   } else {
     await env.DB.prepare(`
       INSERT INTO subscriptions (
@@ -3308,7 +3791,7 @@ async function verifyPaystackPayment(
     `)
       .bind(
         user.id,
-        payment.plan,
+        plan,
         reference,
         "active",
         startDate.toISOString(),
@@ -3319,10 +3802,11 @@ async function verifyPaystackPayment(
 
   return {
     success: true,
-    payment_status: "success",
+    payment_status:
+      "success",
     reference,
     email,
-    plan: payment.plan,
+    plan,
     plan_name:
       selectedPlan.name,
     starts_at:
@@ -3334,10 +3818,186 @@ async function verifyPaystackPayment(
 
 
 // ============================================================
-// ACTIVE SUBSCRIPTION
+// TRIAL START
 // ============================================================
 
-async function getActiveSubscriptionByEmail(
+async function startTrial(
+  email,
+  env
+) {
+  const user =
+    await env.DB.prepare(`
+      SELECT id, email
+      FROM users
+      WHERE email = ?
+      LIMIT 1
+    `)
+      .bind(email)
+      .first();
+
+  if (!user) {
+    return {
+      success: false,
+      error:
+        "User account not found. Register first."
+    };
+  }
+
+  /*
+   * Check whether the account has EVER used a trial.
+   */
+  const previousTrial =
+    await env.DB.prepare(`
+      SELECT id
+      FROM subscriptions
+      WHERE user_id = ?
+        AND plan = 'trial'
+      LIMIT 1
+    `)
+      .bind(user.id)
+      .first();
+
+  if (previousTrial) {
+    return {
+      success: false,
+      trial_started: false,
+      error:
+        "This account has already used its free trial."
+    };
+  }
+
+  /*
+   * Don't create a trial if a paid subscription
+   * already exists.
+   */
+  const paid =
+    await env.DB.prepare(`
+      SELECT id
+      FROM subscriptions
+      WHERE user_id = ?
+        AND plan != 'trial'
+        AND status = 'active'
+        AND datetime(expires_at) > datetime('now')
+      LIMIT 1
+    `)
+      .bind(user.id)
+      .first();
+
+  if (paid) {
+    return {
+      success: true,
+      trial_started: false,
+      message:
+        "User already has an active paid subscription."
+    };
+  }
+
+  const now =
+    new Date();
+
+  const expires =
+    new Date(
+      now.getTime() +
+      TRIAL_DAYS *
+      24 *
+      60 *
+      60 *
+      1000
+    );
+
+  await env.DB.prepare(`
+    INSERT INTO subscriptions (
+      user_id,
+      plan,
+      paystack_reference,
+      status,
+      starts_at,
+      expires_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?)
+  `)
+    .bind(
+      user.id,
+      "trial",
+      null,
+      "active",
+      now.toISOString(),
+      expires.toISOString()
+    )
+    .run();
+
+  return {
+    success: true,
+    trial_started: true,
+    trial_days: TRIAL_DAYS,
+    plan: "trial",
+    plan_name:
+      "21-Day Free Trial",
+    starts_at:
+      now.toISOString(),
+    expires_at:
+      expires.toISOString()
+  };
+}
+
+
+// ============================================================
+// AUTOMATIC TRIAL CREATION
+// ============================================================
+
+async function ensureTrialForUser(
+  email,
+  env
+) {
+  if (!env.DB) {
+    return null;
+  }
+
+  const user =
+    await env.DB.prepare(`
+      SELECT id
+      FROM users
+      WHERE email = ?
+      LIMIT 1
+    `)
+      .bind(email)
+      .first();
+
+  if (!user) {
+    return null;
+  }
+
+  const anySubscription =
+    await env.DB.prepare(`
+      SELECT
+        id,
+        plan,
+        status,
+        expires_at
+      FROM subscriptions
+      WHERE user_id = ?
+      ORDER BY id DESC
+      LIMIT 1
+    `)
+      .bind(user.id)
+      .first();
+
+  if (anySubscription) {
+    return anySubscription;
+  }
+
+  return startTrial(
+    email,
+    env
+  );
+}
+
+
+// ============================================================
+// GET LATEST SUBSCRIPTION
+// ============================================================
+
+async function getLatestSubscriptionByEmail(
   email,
   env
 ) {
@@ -3348,11 +4008,14 @@ async function getActiveSubscriptionByEmail(
   const row =
     await env.DB.prepare(`
       SELECT
+        u.id AS user_id,
         u.email,
+        s.id AS subscription_id,
         s.plan,
         s.starts_at,
         s.expires_at,
-        s.status
+        s.status,
+        s.paystack_reference
       FROM users u
       INNER JOIN subscriptions s
         ON s.user_id = u.id
@@ -3379,44 +4042,65 @@ async function getActiveSubscriptionByEmail(
     ) ||
     expiry <= new Date()
   ) {
-    await env.DB.prepare(`
-      UPDATE subscriptions
-      SET status = ?
-      WHERE user_id = (
-        SELECT id
-        FROM users
-        WHERE email = ?
-        LIMIT 1
-      )
-      AND status = 'active'
-    `)
-      .bind(
-        "expired",
-        email
-      )
-      .run();
+    await expireUserSubscription(
+      row.user_id,
+      env
+    );
 
     return null;
   }
 
-  return {
-    email: row.email,
-    plan: row.plan,
-    plan_name:
-      row.plan === "trial"
-        ? "21-Day Free Trial"
-        : PLANS[row.plan]?.name ||
-          row.plan,
-    starts_at:
-      row.starts_at,
-    expires_at:
-      row.expires_at
-  };
+  return row;
 }
 
 
 // ============================================================
-// TELEGRAM AUTH
+// EXPIRE USER ACCESS
+// ============================================================
+
+async function expireUserSubscription(
+  userId,
+  env
+) {
+  if (!env.DB) {
+    return;
+  }
+
+  await env.DB.prepare(`
+    UPDATE subscriptions
+    SET status = 'expired'
+    WHERE user_id = ?
+      AND status = 'active'
+      AND datetime(expires_at) <= datetime('now')
+  `)
+    .bind(userId)
+    .run();
+}
+
+
+// ============================================================
+// EXPIRE ALL OLD SUBSCRIPTIONS
+// ============================================================
+
+async function expireOldSubscriptions(
+  env
+) {
+  if (!env.DB) {
+    return;
+  }
+
+  await env.DB.prepare(`
+    UPDATE subscriptions
+    SET status = 'expired'
+    WHERE status = 'active'
+      AND datetime(expires_at) <= datetime('now')
+  `)
+    .run();
+}
+
+
+// ============================================================
+// TELEGRAM AUTHORIZATION
 // ============================================================
 
 async function isTelegramAuthorized(
@@ -3426,6 +4110,9 @@ async function isTelegramAuthorized(
   const id =
     String(telegramId);
 
+  /*
+   * OWNER ALWAYS HAS ACCESS.
+   */
   if (
     id === OWNER_TELEGRAM_ID
   ) {
@@ -3464,7 +4151,7 @@ async function isTelegramAuthorized(
   }
 
   const subscription =
-    await getActiveSubscriptionByEmail(
+    await getLatestSubscriptionByEmail(
       link.email,
       env
     );
@@ -3472,16 +4159,24 @@ async function isTelegramAuthorized(
   if (!subscription) {
     return {
       authorized: false,
-      owner: false
+      owner: false,
+      expired: true,
+      email:
+        link.email
     };
   }
 
   return {
     authorized: true,
     owner: false,
-    email: link.email,
+    email:
+      link.email,
     plan:
-      subscription.plan
+      subscription.plan,
+    trial:
+      subscription.plan === "trial",
+    expires_at:
+      subscription.expires_at
   };
 }
 
@@ -3496,6 +4191,9 @@ async function getAuthorizedTelegramIds(
   const ids =
     new Set();
 
+  /*
+   * OWNER
+   */
   ids.add(
     OWNER_TELEGRAM_ID
   );
@@ -3505,6 +4203,14 @@ async function getAuthorizedTelegramIds(
       ...ids
     ];
   }
+
+  /*
+   * Expire old subscriptions before
+   * calculating recipients.
+   */
+  await expireOldSubscriptions(
+    env
+  );
 
   const rows =
     await env.DB.prepare(`
@@ -3543,7 +4249,7 @@ async function getAuthorizedTelegramIds(
 
 
 // ============================================================
-// TELEGRAM HANDLER
+// TELEGRAM MESSAGE HANDLER
 // ============================================================
 
 async function handleTelegramMessage(
@@ -3569,11 +4275,13 @@ async function handleTelegramMessage(
     return;
   }
 
-  // ========================================================
+  // ==========================================================
   // START
-  // ========================================================
+  // ==========================================================
 
-  if (text === "/start") {
+  if (
+    text === "/start"
+  ) {
     const access =
       await isTelegramAuthorized(
         telegramId,
@@ -3587,7 +4295,12 @@ async function handleTelegramMessage(
 
 Owner access is active.
 
-📡 Automatic scanning is enabled.
+You do NOT need:
+• Subscription
+• Trial
+• Payment
+
+📡 Automatic signals are enabled.
 
 Use /signals for a manual scan.`,
         env.TELEGRAM_BOT_TOKEN
@@ -3597,11 +4310,24 @@ Use /signals for a manual scan.`,
     }
 
     if (access.authorized) {
+      const planText =
+        access.trial
+          ? "21-Day Free Trial"
+          : (
+              PLANS[access.plan]?.name ||
+              access.plan
+            );
+
       await sendTelegramMessage(
         chatId,
         `🔥 CYBERFX
 
-Your access is active.
+Access: ACTIVE
+
+Plan: ${planText}
+
+Expires:
+${access.expires_at}
 
 📡 Automatic signals are enabled.
 
@@ -3618,9 +4344,9 @@ Use /signals for the current scan.`,
 
 Access denied.
 
-You need an active CyberFX trial or paid subscription linked to this Telegram account.
+Your CyberFX subscription or free trial is not active.
 
-Subscribe/register:
+Register and subscribe through:
 
 ${WEBSITE_URL}`,
       env.TELEGRAM_BOT_TOKEN
@@ -3629,31 +4355,33 @@ ${WEBSITE_URL}`,
     return;
   }
 
-  // ========================================================
+  // ==========================================================
   // SUBSCRIBE
-  // ========================================================
+  // ==========================================================
 
-  if (text === "/subscribe") {
+  if (
+    text === "/subscribe"
+  ) {
     await sendTelegramMessage(
       chatId,
       `🔥 CYBERFX
 
-Register and subscribe here:
+Register through:
 
 ${WEBSITE_URL}
 
-New users receive a 21-day free trial.
+New users receive a 21-DAY FREE TRIAL.
 
-After the trial expires, access automatically stops unless a paid subscription is active.`,
+After the trial expires, an active paid subscription is required for signal access.`,
       env.TELEGRAM_BOT_TOKEN
     );
 
     return;
   }
 
-  // ========================================================
-  // SIGNAL
-  // ========================================================
+  // ==========================================================
+  // SIGNALS
+  // ==========================================================
 
   if (
     text === "/signal" ||
@@ -3670,9 +4398,11 @@ After the trial expires, access automatically stops unless a paid subscription i
         chatId,
         `🔒 CYBERFX
 
-Your access is inactive.
+Access denied.
 
-Register or subscribe here:
+Your free trial or paid subscription is not active.
+
+Subscribe here:
 
 ${WEBSITE_URL}`,
         env.TELEGRAM_BOT_TOKEN
@@ -3697,7 +4427,7 @@ ${WEBSITE_URL}`,
           chatId,
           `CYBERFX
 
-No active rejection, valid setup, or confirmed setup at the moment.`,
+No active rejection, valid setup, or confirmed signal at the moment.`,
           env.TELEGRAM_BOT_TOKEN
         );
 
@@ -3734,11 +4464,13 @@ Signal engine temporarily unavailable.`,
     return;
   }
 
-  // ========================================================
+  // ==========================================================
   // HELP
-  // ========================================================
+  // ==========================================================
 
-  if (text === "/help") {
+  if (
+    text === "/help"
+  ) {
     await sendTelegramMessage(
       chatId,
       `🔥 CYBERFX
@@ -3747,12 +4479,14 @@ Commands:
 
 /start — Check access
 /signals — Manual signal scan
-/subscribe — Subscription/trial
+/subscribe — Subscription website
 /help — Show commands
 
-📡 Active users receive new signals automatically.`,
+📡 Active users receive new CyberFX setups automatically.`,
       env.TELEGRAM_BOT_TOKEN
     );
+
+    return;
   }
 }
 
@@ -3773,6 +4507,13 @@ async function runAutomaticScan(
   }
 
   try {
+    /*
+     * Expire old trials/subscriptions first.
+     */
+    await expireOldSubscriptions(
+      env
+    );
+
     const signals =
       await generateSignals();
 
@@ -3783,6 +4524,41 @@ async function runAutomaticScan(
           "NO SIGNAL"
       );
 
+    const recipients =
+      await getAuthorizedTelegramIds(
+        env
+      );
+
+    /*
+     * Session opening notice.
+     */
+    const sessionOpening =
+      getSessionOpeningMessage();
+
+    if (
+      sessionOpening &&
+      sessionOpening.minutesUntilOpen <= 15
+    ) {
+      const notice =
+        `⏰ CYBERFX SESSION
+
+${sessionOpening.session} session is opening/approaching.
+
+📡 CyberFX engine is monitoring for setups.
+
+Risk/Reward: 1:10`;
+
+      for (
+        const chatId of recipients
+      ) {
+        await sendTelegramMessage(
+          chatId,
+          notice,
+          env.TELEGRAM_BOT_TOKEN
+        );
+      }
+    }
+
     if (!active.length) {
       console.log(
         "CYBERFX: No active signals."
@@ -3791,10 +4567,9 @@ async function runAutomaticScan(
       return;
     }
 
-    const recipients =
-      await getAuthorizedTelegramIds(
-        env
-      );
+    console.log(
+      `CYBERFX: ${active.length} active signal(s). ${recipients.length} Telegram recipient(s).`
+    );
 
     for (
       const signal of active
@@ -3804,16 +4579,18 @@ async function runAutomaticScan(
           signal
         );
 
-      if (
+      const alreadySent =
         await wasSignalSent(
           signature,
           env
-        )
-      ) {
+        );
+
+      if (alreadySent) {
         continue;
       }
 
-      let delivered = false;
+      let successfulDelivery =
+        false;
 
       for (
         const chatId of recipients
@@ -3828,11 +4605,12 @@ async function runAutomaticScan(
           );
 
         if (result?.ok) {
-          delivered = true;
+          successfulDelivery =
+            true;
         }
       }
 
-      if (delivered) {
+      if (successfulDelivery) {
         await markSignalSent(
           signature,
           signal,
@@ -3857,19 +4635,18 @@ async function runAutomaticScan(
 function createSignalSignature(
   signal
 ) {
+  const candleTime =
+    signal.signalTime ||
+    signal.internal?.signalCandleTime ||
+    "unknown";
+
   return [
-    signal.symbol ||
-      signal.instrument,
-
+    signal.instrument,
     signal.status,
-
     signal.direction,
-
     signal.entryTFRaw ||
       signal.entryTF,
-
-    signal.signalTime ||
-      "unknown"
+    candleTime
   ]
     .map(
       value =>
@@ -3910,6 +4687,10 @@ async function ensureSentSignalsTable(
 }
 
 
+// ============================================================
+// CHECK SENT SIGNAL
+// ============================================================
+
 async function wasSignalSent(
   signature,
   env
@@ -3935,11 +4716,20 @@ async function wasSignalSent(
 
     return !!row;
 
-  } catch {
+  } catch (error) {
+    console.error(
+      "Signal history check error:",
+      error
+    );
+
     return false;
   }
 }
 
+
+// ============================================================
+// MARK SIGNAL SENT
+// ============================================================
 
 async function markSignalSent(
   signature,
@@ -3968,8 +4758,7 @@ async function markSignalSent(
     `)
       .bind(
         signature,
-        signal.instrument ||
-          signal.symbol,
+        signal.instrument,
         signal.status,
         signal.direction || "",
         signal.entryTF || "",
@@ -3977,6 +4766,9 @@ async function markSignalSent(
       )
       .run();
 
+    /*
+     * Keep only the newest 500 records.
+     */
     await env.DB.prepare(`
       DELETE FROM sent_signals
       WHERE id NOT IN (
@@ -3990,7 +4782,7 @@ async function markSignalSent(
 
   } catch (error) {
     console.error(
-      "Signal history error:",
+      "Signal history save error:",
       error
     );
   }
@@ -3998,15 +4790,26 @@ async function markSignalSent(
 
 
 // ============================================================
-// TELEGRAM FORMAT
+// TELEGRAM OUTPUT
 // ============================================================
 
 function formatTelegramSignal(
   signal
 ) {
+  const marketType =
+    signal.synthetic
+      ? "SYNTHETIC"
+      : (
+          signal.marketType ||
+          "MARKET"
+        ).toUpperCase();
+
+  // ==========================================================
+  // REJECTION
+  // ==========================================================
+
   if (
-    signal.status ===
-    "REJECTION"
+    signal.status === "REJECTION"
   ) {
     const icon =
       signal.direction === "BUY"
@@ -4017,7 +4820,11 @@ function formatTelegramSignal(
 
 ${signal.instrument}
 
+Market: ${marketType}
+
 Entry TF: ${signal.entryTF}
+
+Session: ${signal.session}
 
 Rejection Level: ${signal.rejectionLevel}
 
@@ -4028,17 +4835,22 @@ ${signal.message}
 ⚠️ DEVELOPING OPPORTUNITY`;
   }
 
+  // ==========================================================
+  // VALID SETUP
+  // ==========================================================
+
   if (
-    signal.status ===
-    "VALID SETUP"
+    signal.status === "VALID SETUP"
   ) {
     return `🟡 CYBERFX VALID SETUP
 
 ${signal.instrument} — ${signal.direction}
 
-Order: ${signal.orderType}
+Market: ${marketType}
 
 Entry TF: ${signal.entryTF}
+
+Session: ${signal.session}
 
 Entry: ${signal.entry}
 
@@ -4047,8 +4859,6 @@ Stop Loss: ${signal.stopLoss}
 Take Profit: ${signal.takeProfit}
 
 Risk/Reward: 1:10
-
-Session: ${signal.session}
 
 Setup:
 ${
@@ -4064,17 +4874,22 @@ ${
 ⚠️ VALID SETUP — AWAITING FULL CONFIRMATION`;
   }
 
+  // ==========================================================
+  // CONFIRMED
+  // ==========================================================
+
   if (
-    signal.status ===
-    "CONFIRMED"
+    signal.status === "CONFIRMED"
   ) {
-    return `🟢 CYBERFX A+ CONFIRMED
+    return `🟢 CYBERFX A+ SIGNAL
 
 ${signal.instrument} — ${signal.direction}
 
-Order: ${signal.orderType}
+Market: ${marketType}
 
 Entry TF: ${signal.entryTF}
+
+Session: ${signal.session}
 
 Entry: ${signal.entry}
 
@@ -4084,11 +4899,11 @@ Take Profit: ${signal.takeProfit}
 
 Risk/Reward: 1:10
 
-Session: ${signal.session}
+✅ A+ CONFIRMED
 
-🟢 A+ CONFIRMED
+GOD OVER MAN
 
-GOD OVER MAN`;
+📡 CyberFX automated signal engine`;
   }
 
   return `CYBERFX
@@ -4118,10 +4933,12 @@ async function sendTelegramMessage(
         `https://api.telegram.org/bot${token}/sendMessage`,
         {
           method: "POST",
+
           headers: {
             "content-type":
               "application/json"
           },
+
           body:
             JSON.stringify({
               chat_id:
@@ -4131,9 +4948,24 @@ async function sendTelegramMessage(
         }
       );
 
-    return await response.json();
+    const result =
+      await response.json();
+
+    if (!result.ok) {
+      console.error(
+        "Telegram sendMessage failed:",
+        result
+      );
+    }
+
+    return result;
 
   } catch (error) {
+    console.error(
+      "Telegram request failed:",
+      error
+    );
+
     return {
       ok: false,
       error:
@@ -4148,7 +4980,9 @@ async function sendTelegramMessage(
 // HELPERS
 // ============================================================
 
-function average(values) {
+function average(
+  values
+) {
   if (!values.length) {
     return 0;
   }
@@ -4163,7 +4997,10 @@ function average(values) {
 }
 
 
-function midpoint(a, b) {
+function midpoint(
+  a,
+  b
+) {
   return (a + b) / 2;
 }
 
@@ -4183,7 +5020,9 @@ function priceInside(
 }
 
 
-function roundPrice(price) {
+function roundPrice(
+  price
+) {
   if (
     !Number.isFinite(price)
   ) {
@@ -4196,28 +5035,20 @@ function roundPrice(price) {
 }
 
 
-function formatTF(tf) {
+function formatTF(
+  tf
+) {
   const names = {
     "15min": "15M",
     "30min": "30M",
     "1h": "1H",
-    "4h": "4H",
-    "1d": "1D"
+    "4h": "4H"
   };
 
-  return names[tf] || tf;
-}
-
-
-function tfPriority(tf) {
-  const priority = {
-    "4h": 4,
-    "1h": 3,
-    "30min": 2,
-    "15min": 1
-  };
-
-  return priority[tf] || 0;
+  return (
+    names[tf] ||
+    tf
+  );
 }
 
 
@@ -4235,7 +5066,7 @@ function addMonths(
 
   result.setUTCMonth(
     result.getUTCMonth() +
-    months
+      months
   );
 
   const lastDay =
@@ -4259,7 +5090,7 @@ function addMonths(
 
 
 // ============================================================
-// JSON
+// JSON RESPONSE
 // ============================================================
 
 function json(
@@ -4270,9 +5101,11 @@ function json(
     JSON.stringify(data),
     {
       status,
+
       headers: {
         "content-type":
           "application/json",
+
         "cache-control":
           "no-store"
       }
