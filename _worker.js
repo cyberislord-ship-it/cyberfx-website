@@ -11,7 +11,7 @@ export default {
       return json({
         success: true,
         engine: "CyberFX",
-        version: "2.0.0",
+        version: "3.0.0",
         status: "online",
         market_data: "Biquote",
         biquote_connected: biquoteConnected,
@@ -422,7 +422,7 @@ export default {
           signal_levels: [
             "REJECTION",
             "VALID SETUP",
-            "CONFIRMED"
+            "A-PLUS CONFIRMED"
           ],
           signals: result
         });
@@ -487,6 +487,10 @@ export default {
   async scheduled(event, env, ctx) {
     ctx.waitUntil(
       runAutomaticScan(env)
+    );
+
+    ctx.waitUntil(
+      expireSubscriptions(env)
     );
   }
 };
@@ -590,6 +594,7 @@ const CONFIRMED_SCORE = 13;
 // ============================================================
 
 const SIGNAL_PRIORITY = {
+  "NO SIGNAL": 0,
   "REJECTION": 1,
   "VALID SETUP": 2,
   "CONFIRMED": 3
@@ -744,8 +749,7 @@ async function discoverSymbols() {
     if (
       type === "commodity" ||
       name === "XAUUSD" ||
-      name === "USOIL" ||
-      name === "UKOIL"
+      name === "USOIL"
     ) {
       wanted.push({
         symbol: name,
@@ -872,23 +876,25 @@ async function getCandles(
 async function loadAllMarkets(symbols) {
   const data = {};
 
-  // Keep requests controlled.
-  // Biquote supports these OHLC intervals directly.
-  for (
-    const item of symbols
-  ) {
+  // Normal analysis uses 4H, 1H, 30M and 15M.
+  // 1D is loaded only on Friday so the engine can prepare the
+  // next market-opening context without using 1D as an entry TF.
+  const fridayOnly = new Date().getUTCDay() === 5;
+
+  const activeTimeframes = TIMEFRAMES.filter(tf =>
+    tf.name !== "1d" || fridayOnly
+  );
+
+  for (const item of symbols) {
     data[item.symbol] = {
       metadata: item
     };
 
-    for (
-      const tf of TIMEFRAMES
-    ) {
-      data[item.symbol][tf.name] =
-        await getCandles(
-          item.symbol,
-          tf.interval
-        );
+    for (const tf of activeTimeframes) {
+      data[item.symbol][tf.name] = await getCandles(
+        item.symbol,
+        tf.interval
+      );
     }
   }
 
@@ -1288,8 +1294,8 @@ function analyzeInstrument(
 
     label:
       structureBreak.direction === "bullish"
-        ? "馃煝 CYBERFX A+ BUY"
-        : "馃煝 CYBERFX A+ SELL",
+        ? " CYBERFX A+ BUY"
+        : " CYBERFX A+ SELL",
 
     session:
 
@@ -1322,141 +1328,73 @@ function analyzeInstrument(
 
 // ============================================================
 // REJECTION
+// Strict rejection only. A wick by itself is not enough.
 // ============================================================
 
 function detectRejection(
   candles,
   structure
 ) {
-  const current =
-    candles[
-      candles.length - 1
-    ];
+  if (!Array.isArray(candles) || candles.length < 5) return null;
 
-  if (!current) {
-    return null;
-  }
+  const current = candles[candles.length - 1];
+  const previous = candles[candles.length - 2];
+  if (!current || !previous) return null;
 
-  const range =
-    current.high -
-    current.low;
+  const range = current.high - current.low;
+  if (!Number.isFinite(range) || range <= 0) return null;
 
-  if (range <= 0) {
-    return null;
-  }
+  const body = Math.abs(current.close - current.open);
+  const upperWick = current.high - Math.max(current.open, current.close);
+  const lowerWick = Math.min(current.open, current.close) - current.low;
+  const closeLocation = (current.close - current.low) / range;
+  const atr = ATR(candles);
 
-  const body =
-    Math.abs(
-      current.close -
-      current.open
-    );
+  if (atr && range < atr * 0.50) return null;
+  if (body <= range * 0.08) return null;
 
-  const upperWick =
-    current.high -
-    Math.max(
-      current.open,
-      current.close
-    );
+  const swingLow = structure?.lows?.length
+    ? structure.lows[structure.lows.length - 1]
+    : null;
+  const swingHigh = structure?.highs?.length
+    ? structure.highs[structure.highs.length - 1]
+    : null;
 
-  const lowerWick =
-    Math.min(
-      current.open,
-      current.close
-    ) -
-    current.low;
-
-  const closeLocation =
-    (
-      current.close -
-      current.low
-    ) / range;
-
-  const atr =
-    ATR(candles);
+  const lowTolerance = Math.max(range * 0.35, atr ? atr * 0.20 : range * 0.35);
+  const highTolerance = Math.max(range * 0.35, atr ? atr * 0.20 : range * 0.35);
 
   if (
-    atr &&
-    range < atr * 0.35
+    lowerWick >= Math.max(body * 1.50, range * 0.35) &&
+    closeLocation >= 0.65 &&
+    swingLow &&
+    Math.abs(current.low - swingLow.price) <= lowTolerance &&
+    current.close > swingLow.price &&
+    previous.close >= swingLow.price
   ) {
-    return null;
+    return {
+      direction: "bullish",
+      type: "BUY REJECTION",
+      level: swingLow.price,
+      candle: current,
+      reason: "Price rejected a swing low and closed back above the level."
+    };
   }
 
   if (
-    lowerWick >=
-      Math.max(
-        body * 1.25,
-        range * 0.30
-      ) &&
-    closeLocation >= 0.60
+    upperWick >= Math.max(body * 1.50, range * 0.35) &&
+    closeLocation <= 0.35 &&
+    swingHigh &&
+    Math.abs(current.high - swingHigh.price) <= highTolerance &&
+    current.close < swingHigh.price &&
+    previous.close <= swingHigh.price
   ) {
-    const level =
-      current.low;
-
-    const nearSwingLow =
-      structure?.lows?.some(
-        swing =>
-          Math.abs(
-            swing.price -
-            level
-          ) <=
-          range * 0.50
-      );
-
-    if (
-      nearSwingLow ||
-      lowerWick >=
-        range * 0.40
-    ) {
-      return {
-        direction: "bullish",
-        type: "BUY REJECTION",
-        level,
-        candle: current,
-        reason:
-          nearSwingLow
-            ? "Swing low rejection"
-            : "Strong lower-wick rejection"
-      };
-    }
-  }
-
-  if (
-    upperWick >=
-      Math.max(
-        body * 1.25,
-        range * 0.30
-      ) &&
-    closeLocation <= 0.40
-  ) {
-    const level =
-      current.high;
-
-    const nearSwingHigh =
-      structure?.highs?.some(
-        swing =>
-          Math.abs(
-            swing.price -
-            level
-          ) <=
-          range * 0.50
-      );
-
-    if (
-      nearSwingHigh ||
-      upperWick >=
-        range * 0.40
-    ) {
-      return {
-        direction: "bearish",
-        type: "SELL REJECTION",
-        level,
-        candle: current,
-        reason:
-          nearSwingHigh
-            ? "Swing high rejection"
-            : "Strong upper-wick rejection"
-      };
-    }
+    return {
+      direction: "bearish",
+      type: "SELL REJECTION",
+      level: swingHigh.price,
+      candle: current,
+      reason: "Price rejected a swing high and closed back below the level."
+    };
   }
 
   return null;
@@ -1497,8 +1435,8 @@ function buildRejectionSignal(
     price: roundPrice(price),
     status: "REJECTION",
     label: direction === "BUY"
-      ? "馃煝 CYBERFX BUY REJECTION"
-      : "馃敶 CYBERFX SELL REJECTION",
+      ? " CYBERFX BUY REJECTION"
+      : " CYBERFX SELL REJECTION",
     session: getTradingSession(current.time).name,
     signalTime: current.time,
     message: rejection.reason || (
@@ -1769,8 +1707,8 @@ function buildValidSetupSignal(
 
     label:
       direction === "bullish"
-        ? "馃煛 CYBERFX VALID BUY SETUP"
-        : "馃煛 CYBERFX VALID SELL SETUP",
+        ? " CYBERFX VALID BUY SETUP"
+        : " CYBERFX VALID SELL SETUP",
 
     components,
 
@@ -2915,54 +2853,26 @@ function normalizeCandles(
 // UTC
 // ============================================================
 
-function getTradingSession(
-  time
-) {
-  const date =
-    new Date(time);
+function getTradingSession(time) {
+  const date = new Date(time);
+  const minutes = date.getUTCHours() * 60 + date.getUTCMinutes();
 
-  const hour =
-    date.getUTCHours();
-
-  if (
-    hour >= 21 ||
-    hour < 6
-  ) {
-    return {
-      name: "Sydney"
-    };
+  // Single primary session for each UTC period. This avoids one
+  // candle being labelled as multiple sessions and keeps signals clear.
+  if (minutes >= 21 * 60 || minutes < 0) {
+    return { name: "Sydney", key: "SYDNEY" };
+  }
+  if (minutes < 8 * 60) {
+    return { name: "Asia", key: "ASIA" };
+  }
+  if (minutes < 13 * 60) {
+    return { name: "London", key: "LONDON" };
+  }
+  if (minutes < 21 * 60) {
+    return { name: "New York", key: "NEW_YORK" };
   }
 
-  if (
-    hour >= 0 &&
-    hour < 9
-  ) {
-    return {
-      name: "Asia"
-    };
-  }
-
-  if (
-    hour >= 7 &&
-    hour < 16
-  ) {
-    return {
-      name: "London"
-    };
-  }
-
-  if (
-    hour >= 12 &&
-    hour < 21
-  ) {
-    return {
-      name: "New York"
-    };
-  }
-
-  return {
-    name: "Global"
-  };
+  return { name: "Global", key: "GLOBAL" };
 }
 
 
@@ -3388,6 +3298,26 @@ async function verifyPaystackPayment(
 
 
 // ============================================================
+// EXPIRE TRIALS / SUBSCRIPTIONS
+// ============================================================
+
+async function expireSubscriptions(env) {
+  if (!env.DB) return;
+
+  try {
+    await env.DB.prepare(`
+      UPDATE subscriptions
+      SET status = 'expired'
+      WHERE status = 'active'
+        AND datetime(expires_at) <= datetime('now')
+    `).run();
+  } catch (error) {
+    console.error("Subscription expiry error:", error);
+  }
+}
+
+
+// ============================================================
 // ACTIVE SUBSCRIPTION
 // ============================================================
 
@@ -3600,213 +3530,100 @@ async function getAuthorizedTelegramIds(
 // TELEGRAM HANDLER
 // ============================================================
 
-async function handleTelegramMessage(
-  message,
-  env,
-  origin
-) {
-  const chatId =
-    message.chat?.id;
-
-  const telegramId =
-    message.from?.id ||
-    chatId;
-
-  const text =
-    String(
-      message.text || ""
-    )
-      .trim()
-      .toLowerCase();
-
-  if (!chatId) {
-    return;
-  }
-
-  // ========================================================
-  // START
-  // ========================================================
+async function handleTelegramMessage(message, env, origin) {
+  const chatId = message.chat?.id;
+  const telegramId = message.from?.id || chatId;
+  const text = String(message.text || "").trim().toLowerCase();
+  if (!chatId) return;
 
   if (text === "/start") {
-    const access =
-      await isTelegramAuthorized(
-        telegramId,
-        env
-      );
-
+    const access = await isTelegramAuthorized(telegramId, env);
     if (access.owner) {
-      await sendTelegramMessage(
-        chatId,
-        `馃憫 CYBERFX OWNER
+      await sendTelegramMessage(chatId, `CYBERFX OWNER
 
 Owner access is active.
 
-馃摗 Automatic scanning is enabled.
-
-Use /signals for a manual scan.`,
-        env.TELEGRAM_BOT_TOKEN
-      );
-
+Automatic scanning is enabled.
+Use /signals for the latest setup.`, env.TELEGRAM_BOT_TOKEN);
       return;
     }
-
     if (access.authorized) {
-      await sendTelegramMessage(
-        chatId,
-        `馃敟 CYBERFX
+      await sendTelegramMessage(chatId, `CYBERFX
 
 Your access is active.
 
-馃摗 Automatic signals are enabled.
-
-Use /signals for the current scan.`,
-        env.TELEGRAM_BOT_TOKEN
-      );
-
+Automatic signals are enabled.
+Use /signals for the latest setup.`, env.TELEGRAM_BOT_TOKEN);
       return;
     }
-
-    await sendTelegramMessage(
-      chatId,
-      `馃敀 CYBERFX
+    await sendTelegramMessage(chatId, `CYBERFX
 
 Access denied.
 
 You need an active CyberFX trial or paid subscription linked to this Telegram account.
 
-Subscribe/register:
-
-${WEBSITE_URL}`,
-      env.TELEGRAM_BOT_TOKEN
-    );
-
+Register:
+${WEBSITE_URL}`, env.TELEGRAM_BOT_TOKEN);
     return;
   }
-
-  // ========================================================
-  // SUBSCRIBE
-  // ========================================================
 
   if (text === "/subscribe") {
-    await sendTelegramMessage(
-      chatId,
-      `馃敟 CYBERFX
+    await sendTelegramMessage(chatId, `CYBERFX
 
-Register and subscribe here:
-
+Register here:
 ${WEBSITE_URL}
 
-New users receive a 21-day free trial.
-
-After the trial expires, access automatically stops unless a paid subscription is active.`,
-      env.TELEGRAM_BOT_TOKEN
-    );
-
+New users receive a 21-day free trial. After 21 days, access automatically closes unless a paid subscription is active.`, env.TELEGRAM_BOT_TOKEN);
     return;
   }
 
-  // ========================================================
-  // SIGNAL
-  // ========================================================
-
-  if (
-    text === "/signal" ||
-    text === "/signals"
-  ) {
-    const access =
-      await isTelegramAuthorized(
-        telegramId,
-        env
-      );
-
+  if (text === "/signal" || text === "/signals") {
+    const access = await isTelegramAuthorized(telegramId, env);
     if (!access.authorized) {
-      await sendTelegramMessage(
-        chatId,
-        `馃敀 CYBERFX
+      await sendTelegramMessage(chatId, `CYBERFX
 
 Your access is inactive.
 
-Register or subscribe here:
-
-${WEBSITE_URL}`,
-        env.TELEGRAM_BOT_TOKEN
-      );
-
+Register or subscribe:
+${WEBSITE_URL}`, env.TELEGRAM_BOT_TOKEN);
       return;
     }
 
     try {
-      const signals =
-        await generateSignals();
-
-      const active =
-        signals.filter(
-          signal =>
-            signal.status !==
-            "NO SIGNAL"
-        );
+      let active = (await generateSignals()).filter(signal => signal && signal.status !== "NO SIGNAL");
+      if (!active.length) active = await getLatestStoredSignals(env);
 
       if (!active.length) {
-        await sendTelegramMessage(
-          chatId,
-          `CYBERFX
+        await sendTelegramMessage(chatId, `CYBERFX
 
-No active rejection, valid setup, or confirmed setup at the moment.`,
-          env.TELEGRAM_BOT_TOKEN
-        );
-
+No active trade at the moment.
+No confirmed A-Plus setup at the moment.`, env.TELEGRAM_BOT_TOKEN);
         return;
       }
 
-      for (
-        const signal of active
-      ) {
-        await sendTelegramMessage(
-          chatId,
-          formatTelegramSignal(
-            signal
-          ),
-          env.TELEGRAM_BOT_TOKEN
-        );
+      for (const signal of active) {
+        await sendTelegramMessage(chatId, formatTelegramSignal(signal), env.TELEGRAM_BOT_TOKEN);
       }
-
     } catch (error) {
-      console.error(
-        "Telegram signal error:",
-        error
-      );
+      console.error("Telegram signal error:", error);
+      await sendTelegramMessage(chatId, `CYBERFX
 
-      await sendTelegramMessage(
-        chatId,
-        `CYBERFX
-
-Signal engine temporarily unavailable.`,
-        env.TELEGRAM_BOT_TOKEN
-      );
+Signal engine temporarily unavailable.`, env.TELEGRAM_BOT_TOKEN);
     }
-
     return;
   }
 
-  // ========================================================
-  // HELP
-  // ========================================================
-
   if (text === "/help") {
-    await sendTelegramMessage(
-      chatId,
-      `馃敟 CYBERFX
+    await sendTelegramMessage(chatId, `CYBERFX
 
 Commands:
 
-/start 鈥� Check access
-/signals 鈥� Manual signal scan
-/subscribe 鈥� Subscription/trial
-/help 鈥� Show commands
+/start - Check access
+/signals - Latest/manual signal
+/subscribe - Trial and subscription
+/help - Show commands
 
-馃摗 Active users receive new signals automatically.`,
-      env.TELEGRAM_BOT_TOKEN
-    );
+Active users receive new setups automatically.`, env.TELEGRAM_BOT_TOKEN);
   }
 }
 
@@ -3815,96 +3632,168 @@ Commands:
 // AUTOMATIC SCAN
 // ============================================================
 
-async function runAutomaticScan(
-  env
-) {
+async function runAutomaticScan(env) {
   if (!env.TELEGRAM_BOT_TOKEN) {
-    console.error(
-      "TELEGRAM_BOT_TOKEN is missing"
-    );
-
+    console.error("TELEGRAM_BOT_TOKEN is missing");
     return;
   }
 
   try {
-    const signals =
-      await generateSignals();
+    const signals = await generateSignals();
+    const active = signals.filter(signal => signal && signal.status !== "NO SIGNAL");
+    const recipients = await getAuthorizedTelegramIds(env);
 
-    const active =
-      signals.filter(
-        signal =>
-          signal.status !==
-          "NO SIGNAL"
-      );
+    await storeLatestSignals(active, env);
+    await updateSessionNotification(env, active, recipients);
 
     if (!active.length) {
-      console.log(
-        "CYBERFX: No active signals."
-      );
-
+      console.log("CYBERFX: No active trade or confirmed A-Plus setup.");
       return;
     }
 
-    const recipients =
-      await getAuthorizedTelegramIds(
-        env
-      );
-
-    for (
-      const signal of active
-    ) {
-      const signature =
-        createSignalSignature(
-          signal
-        );
-
-      if (
-        await wasSignalSent(
-          signature,
-          env
-        )
-      ) {
-        continue;
-      }
+    for (const signal of active) {
+      const signature = createSignalSignature(signal);
+      if (await wasSignalSent(signature, env)) continue;
 
       let delivered = false;
-
-      for (
-        const chatId of recipients
-      ) {
-        const result =
-          await sendTelegramMessage(
-            chatId,
-            formatTelegramSignal(
-              signal
-            ),
-            env.TELEGRAM_BOT_TOKEN
-          );
-
-        if (result?.ok) {
-          delivered = true;
-        }
+      for (const chatId of recipients) {
+        const result = await sendTelegramMessage(chatId, formatTelegramSignal(signal), env.TELEGRAM_BOT_TOKEN);
+        if (result?.ok) delivered = true;
       }
-
-      if (delivered) {
-        await markSignalSent(
-          signature,
-          signal,
-          env
-        );
-      }
+      if (delivered) await markSignalSent(signature, signal, env);
     }
-
   } catch (error) {
-    console.error(
-      "Automatic scan error:",
-      error
-    );
+    console.error("Automatic scan error:", error);
   }
 }
 
 
 // ============================================================
+// LATEST SIGNAL STORAGE
+// ============================================================
+
+async function ensureLatestSignalsTable(env) {
+  if (!env.DB) return;
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS latest_signals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      symbol TEXT NOT NULL UNIQUE,
+      payload TEXT NOT NULL,
+      signal_time TEXT,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `).run();
+}
+
+async function storeLatestSignals(signals, env) {
+  if (!env.DB || !Array.isArray(signals)) return;
+  try {
+    await ensureLatestSignalsTable(env);
+    for (const signal of signals) {
+      if (!signal?.symbol) continue;
+      await env.DB.prepare(`
+        INSERT INTO latest_signals (symbol, payload, signal_time, updated_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(symbol) DO UPDATE SET
+          payload = excluded.payload,
+          signal_time = excluded.signal_time,
+          updated_at = CURRENT_TIMESTAMP
+      `).bind(signal.symbol, JSON.stringify(signal), signal.signalTime || "").run();
+    }
+  } catch (error) {
+    console.error("Latest signal storage error:", error);
+  }
+}
+
+async function getLatestStoredSignals(env) {
+  if (!env.DB) return [];
+  try {
+    await ensureLatestSignalsTable(env);
+    const result = await env.DB.prepare(`
+      SELECT payload FROM latest_signals ORDER BY updated_at DESC LIMIT 100
+    `).all();
+    return (result.results || []).map(row => {
+      try { return JSON.parse(row.payload); } catch { return null; }
+    }).filter(Boolean);
+  } catch (error) {
+    console.error("Latest signal read error:", error);
+    return [];
+  }
+}
+
+
+// ============================================================
+// SESSION NOTIFICATIONS
+// ============================================================
+
+async function ensureSessionStateTable(env) {
+  if (!env.DB) return;
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS session_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      session_key TEXT,
+      session_name TEXT,
+      session_date TEXT,
+      trade_seen INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `).run();
+}
+
+async function updateSessionNotification(env, activeSignals, recipients) {
+  if (!env.DB || !recipients.length) return;
+
+  try {
+    await ensureSessionStateTable(env);
+    const now = new Date();
+    const session = getTradingSession(now.toISOString());
+    const dateKey = now.toISOString().slice(0, 10);
+    const row = await env.DB.prepare(`SELECT * FROM session_state WHERE id = 1`).first();
+    const sessionHasTrade = activeSignals.some(signal => signal?.session === session.name);
+
+    if (!row) {
+      await env.DB.prepare(`INSERT INTO session_state (id, session_key, session_name, session_date, trade_seen) VALUES (1, ?, ?, ?, ?)`)
+        .bind(session.key, session.name, dateKey, sessionHasTrade ? 1 : 0).run();
+      await broadcastSessionMessage(recipients, `CYBERFX SESSION UPDATE
+
+We are in ${session.name} session.
+
+${sessionHasTrade ? "A setup has been found in this session." : "No confirmed A-Plus setup has been found yet. We are waiting for a valid setup."}`, env);
+      return;
+    }
+
+    if (row.session_key !== session.key || row.session_date !== dateKey) {
+      const previousTrade = Number(row.trade_seen) === 1;
+      await broadcastSessionMessage(recipients, `CYBERFX SESSION UPDATE
+
+${previousTrade ? `A setup was found during ${row.session_name} session.` : `No trade was seen during ${row.session_name} session.`}
+
+We are now in ${session.name} session.
+${sessionHasTrade ? "A setup has already been found in this session." : "No confirmed A-Plus setup has been found yet. We will wait."}`, env);
+      await env.DB.prepare(`UPDATE session_state SET session_key = ?, session_name = ?, session_date = ?, trade_seen = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1`)
+        .bind(session.key, session.name, dateKey, sessionHasTrade ? 1 : 0).run();
+      return;
+    }
+
+    if (sessionHasTrade && Number(row.trade_seen) === 0) {
+      await broadcastSessionMessage(recipients, `CYBERFX SESSION UPDATE
+
+A setup has been found in the ${session.name} session.
+The signal notification will identify this session.`, env);
+      await env.DB.prepare(`UPDATE session_state SET trade_seen = 1, updated_at = CURRENT_TIMESTAMP WHERE id = 1`).run();
+    }
+  } catch (error) {
+    console.error("Session notification error:", error);
+  }
+}
+
+async function broadcastSessionMessage(recipients, text, env) {
+  for (const chatId of recipients) {
+    await sendTelegramMessage(chatId, text, env.TELEGRAM_BOT_TOKEN);
+  }
+}
+
+
 // SIGNAL SIGNATURE
 // ============================================================
 
@@ -3912,10 +3801,7 @@ function createSignalSignature(
   signal
 ) {
   return [
-    signal.symbol ||
-      signal.instrument,
-
-    signal.status,
+    signal.symbol || signal.instrument,
 
     signal.direction,
 
@@ -4055,19 +3941,9 @@ async function markSignalSent(
 // TELEGRAM FORMAT
 // ============================================================
 
-function formatTelegramSignal(
-  signal
-) {
-  if (
-    signal.status ===
-    "REJECTION"
-  ) {
-    const icon =
-      signal.direction === "BUY"
-        ? "馃煝"
-        : "馃敶";
-
-    return `${icon} CYBERFX ${signal.direction} REJECTION
+function formatTelegramSignal(signal) {
+  if (signal.status === "REJECTION") {
+    return `CYBERFX ${signal.direction} REJECTION
 
 ${signal.instrument}
 
@@ -4077,18 +3953,17 @@ Rejection Level: ${signal.rejectionLevel}
 
 Current Price: ${signal.price}
 
+Session: ${signal.session}
+
 ${signal.message}
 
-鈿狅笍 DEVELOPING OPPORTUNITY`;
+DEVELOPING OPPORTUNITY`;
   }
 
-  if (
-    signal.status ===
-    "VALID SETUP"
-  ) {
-    return `馃煛 CYBERFX VALID SETUP
+  if (signal.status === "VALID SETUP") {
+    return `CYBERFX VALID SETUP
 
-${signal.instrument} 鈥� ${signal.direction}
+${signal.instrument} - ${signal.direction}
 
 Order: ${signal.orderType}
 
@@ -4105,26 +3980,15 @@ Risk/Reward: 1:10
 Session: ${signal.session}
 
 Setup:
-${
-  signal.components?.length
-    ? signal.components
-        .map(
-          x => `鈥� ${x}`
-        )
-        .join("\n")
-    : "鈥� Developing structure"
-}
+${signal.components?.length ? signal.components.map(x => `- ${x}`).join("\n") : "- Developing structure"}
 
-鈿狅笍 VALID SETUP 鈥� AWAITING FULL CONFIRMATION`;
+VALID SETUP - AWAITING FULL CONFIRMATION`;
   }
 
-  if (
-    signal.status ===
-    "CONFIRMED"
-  ) {
-    return `馃煝 CYBERFX A+ CONFIRMED
+  if (signal.status === "CONFIRMED") {
+    return `CYBERFX A-PLUS CONFIRMED
 
-${signal.instrument} 鈥� ${signal.direction}
+${signal.instrument} - ${signal.direction}
 
 Order: ${signal.orderType}
 
@@ -4140,9 +4004,7 @@ Risk/Reward: 1:10
 
 Session: ${signal.session}
 
-馃煝 A+ CONFIRMED
-
-GOD OVER MAN`;
+A-PLUS SETUP CONFIRMED`;
   }
 
   return `CYBERFX
@@ -4153,7 +4015,6 @@ Status: ${signal.status}`;
 }
 
 
-// ============================================================
 // TELEGRAM API
 // ============================================================
 
@@ -4332,4 +4193,4 @@ function json(
       }
     }
   );
-    }
+}
