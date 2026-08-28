@@ -15,3 +15,9 @@ database_id = "b70244b6-7e8c-4420-bda7-475de2111c63"
 
 [triggers]
 crons = ["*/15 * * * *"]
+
+[observability.logs]
+enabled = true
+invocation_logs = true
+persist = true
+head_sampling_rate = 1
