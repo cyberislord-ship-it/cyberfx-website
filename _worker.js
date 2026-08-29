@@ -51,6 +51,7 @@ export default {
           finished_at: new Date().toISOString(),
           biquote_connected: biquoteConnected,
           main_instruments_configured: MAIN_MARKET_SYMBOLS.length,
+          total_cyberfx_markets: MAIN_MARKET_SYMBOLS.length + Object.keys(SYNTHETIC_ALIASES).length,
           main_instruments_discovered: discovered.length,
           synthetic_targets: Object.keys(SYNTHETIC_ALIASES),
           synthetic_discovered: Object.fromEntries(
@@ -641,12 +642,7 @@ const MAIN_MARKET_SYMBOLS = [
   "XAUUSD",
   "BTCUSD",
   "USTEC",
-  "USOIL",
-  "EURUSD",
-  "GBPUSD",
-  "USDJPY",
-  "EURJPY",
-  "GBPJPY"
+  "USOIL"
 ];
 
 // Synthetics are handled separately with lightweight statistics.
@@ -654,7 +650,8 @@ const SYNTHETIC_ALIASES = {
   V75: ["V75", "VOLATILITY75", "VOLATILITY 75", "R_75", "R75"],
   V25: ["V25", "VOLATILITY25", "VOLATILITY 25", "R_25", "R25"],
   BOOM1000: ["BOOM1000", "BOOM 1000", "BOOM_1000"],
-  STEPINDEX: ["STEPINDEX", "STEP INDEX", "STEP_INDEX", "STP" ]
+  STEPINDEX: ["STEPINDEX", "STEP INDEX", "STEP_INDEX", "STP"],
+  CRASH1000: ["CRASH1000", "CRASH 1000", "CRASH_1000"]
 };
 
 const SYNTHETIC_SCAN_INTERVAL = "1m";
@@ -925,7 +922,16 @@ async function generateSignals() {
     }
   }
 
-  return results;
+  results.sort((a, b) => {
+    const priority =
+      (SIGNAL_PRIORITY[b.status] || 0) -
+      (SIGNAL_PRIORITY[a.status] || 0);
+    if (priority !== 0) return priority;
+    return new Date(b.signalTime || 0).getTime() -
+      new Date(a.signalTime || 0).getTime();
+  });
+
+  return results.slice(0, 9);
 }
 
 
@@ -1007,6 +1013,25 @@ function analyzeSynthetic(item, values) {
       model: "Step Index statistical consistency",
       consistency: Number(consistency.toFixed(3)),
       volatilityRatio: Number(volatilityRatio.toFixed(3))
+    });
+  }
+
+  if (item.syntheticType === "CRASH1000") {
+    const tickStats = calculateTickWindowStats(candles, BOOM_TICK_WINDOW);
+    if (!tickStats.valid) return null;
+
+    // Crash 1000 uses the requested 1,000-tick statistical window.
+    // This is statistical analysis only and does not guarantee a spike.
+    if (tickStats.progress < 0.75 || volatilityRatio < 0.8) return null;
+
+    const bullish =
+      rejection?.direction === "bullish" ||
+      directionStats.bullish > directionStats.bearish;
+    const direction = bullish ? "BUY" : "SELL";
+
+    return buildSyntheticStatSignal(item, current, direction, "1M", {
+      model: "Crash 1000 1,000-tick statistical window",
+      tickWindow: tickStats
     });
   }
 
@@ -3776,49 +3801,78 @@ async function handleTelegramMessage(
         env
       );
 
+    const welcome = `CYBERFX
+
+Welcome to the CyberFX automated market signal engine.
+
+MARKETS SCANNED
+
+1. XAUUSD — GOLD
+2. BTCUSD — BITCOIN
+3. USTEC — US TECH / NASDAQ
+4. USOIL — US OIL
+5. VOLATILITY 75 INDEX
+6. VOLATILITY 25 INDEX
+7. BOOM 1000 INDEX
+8. STEP INDEX
+9. CRASH 1000 INDEX
+
+SIGNAL TYPES
+BUY REJECTION
+SELL REJECTION
+VALID BUY SETUP
+VALID SELL SETUP
+CONFIRMED BUY
+CONFIRMED SELL
+
+ENTRY TIMEFRAMES
+15M • 30M • 1H
+
+HIGHER-TIMEFRAME ANALYSIS
+4H • 1D
+
+RISK/REWARD
+1:10`;
+
     if (access.owner) {
       await sendTelegramMessage(
         chatId,
-        `CYBERFX OWNER
+        `${welcome}
 
 Owner access is active.
 
-📡 Automatic scanning is enabled.
-
-Use /signals for a manual scan.`,
+Use /signals for a manual scan.
+Use /subscribe for subscription information.`,
         env.TELEGRAM_BOT_TOKEN
       );
-
       return;
     }
 
     if (access.authorized) {
       await sendTelegramMessage(
         chatId,
-        `CYBERFX
+        `${welcome}
 
 Your access is active.
+Automatic signals are enabled.
 
-📡 Automatic signals are enabled.
-
-Use /signals for the current scan.`,
+Use /signals for the current scan.
+Use /subscribe for subscription information.`,
         env.TELEGRAM_BOT_TOKEN
       );
-
       return;
     }
 
     await sendTelegramMessage(
       chatId,
-      `CYBERFX
+      `${welcome}
 
-Access denied.
+Your access is currently inactive.
 
-You need an active CyberFX trial or paid subscription linked to this Telegram account.
+Subscribe/register here:
+${WEBSITE_URL}
 
-Subscribe/register:
-
-${WEBSITE_URL}`,
+New users receive a 21-day free trial.`,
       env.TELEGRAM_BOT_TOKEN
     );
 
@@ -3941,12 +3995,12 @@ Signal engine temporarily unavailable.`,
 
 Commands:
 
-/start — Check access
-/signals — Manual signal scan
-/subscribe — Subscription/trial
-/help — Show commands
+/start - Check access
+/signals - Manual signal scan
+/subscribe - Subscription/trial
+/help - Show commands
 
-📡 Active users receive new signals automatically.`,
+Active users receive new signals automatically.`,
       env.TELEGRAM_BOT_TOKEN
     );
   }
@@ -4194,6 +4248,57 @@ async function markSignalSent(
 
 
 // ============================================================
+// MARKET / EXPECTED TRIGGER DATE
+// ============================================================
+// Signals are based on the latest CLOSED candle. If a normal
+// market is closed (weekend/holiday), the signal is marked with
+// an expected trigger date instead of pretending it can trigger
+// while the market is closed. Synthetics are treated separately
+// because they are designed to trade continuously.
+
+function isWeekendUTC(date) {
+  const day = date.getUTCDay();
+  return day === 0 || day === 6;
+}
+
+function nextBusinessDayUTC(date) {
+  const result = new Date(date);
+  result.setUTCHours(12, 0, 0, 0);
+  do {
+    result.setUTCDate(result.getUTCDate() + 1);
+  } while (isWeekendUTC(result));
+  return result;
+}
+
+function getExpectedTriggerDate(signal) {
+  if (signal?.category === "SYNTHETIC") {
+    return null;
+  }
+
+  const raw = signal?.signalTime || new Date().toISOString();
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return null;
+
+  // The signal is based on a closed candle. On weekends, the
+  // next normal business session is the next possible trigger date.
+  if (isWeekendUTC(date)) {
+    return nextBusinessDayUTC(date).toISOString().slice(0, 10);
+  }
+
+  return date.toISOString().slice(0, 10);
+}
+
+function isNormalMarketClosed(signal) {
+  if (!signal || signal.category === "SYNTHETIC" || signal.category === "CRYPTO") {
+    return false;
+  }
+
+  const date = new Date(signal.signalTime || Date.now());
+  if (Number.isNaN(date.getTime())) return false;
+  return isWeekendUTC(date);
+}
+
+// ============================================================
 // TELEGRAM FORMAT
 // ============================================================
 
@@ -4216,6 +4321,7 @@ Current Price: ${signal.price}
 
 ${signal.message}
 
+${isNormalMarketClosed(signal) ? `EXPECTED TRIGGER DATE: ${getExpectedTriggerDate(signal)}` : ""}
 DEVELOPING OPPORTUNITY`;
   }
 
@@ -4241,6 +4347,7 @@ Risk/Reward: 1:10
 
 Session: ${signal.session}
 
+${isNormalMarketClosed(signal) ? `EXPECTED TRIGGER DATE: ${getExpectedTriggerDate(signal)}\n` : ""}
 Setup:
 ${
   signal.components?.length
@@ -4277,6 +4384,7 @@ Risk/Reward: 1:10
 
 Session: ${signal.session}
 
+${isNormalMarketClosed(signal) ? `EXPECTED TRIGGER DATE: ${getExpectedTriggerDate(signal)}\n` : ""}
 A+ CONFIRMED
 
 GOD OVER MAN`;
