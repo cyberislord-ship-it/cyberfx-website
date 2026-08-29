@@ -4204,7 +4204,6 @@ function formatTelegramSignal(
     signal.status ===
     "REJECTION"
   ) {
-    const icon =
     return `CYBERFX ${signal.direction} REJECTION
 
 ${signal.instrument}
