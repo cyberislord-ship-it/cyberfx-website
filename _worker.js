@@ -6,7 +6,7 @@ export default {
     // HEALTH
     // =========================================================
     if (url.pathname === "/api/health") {
-      const biquoteConnected = await checkBiquote();
+      const biquote = await checkBiquote();
 
       return json({
         success: true,
@@ -14,7 +14,10 @@ export default {
         version: "2.0.0",
         status: "online",
         market_data: "Biquote",
-        biquote_connected: biquoteConnected,
+        biquote_connected: biquote.connected,
+        biquote_status: biquote.status,
+        biquote_latency_ms: biquote.latency_ms,
+        biquote_error: biquote.error || null,
         telegram_connected: !!env.TELEGRAM_BOT_TOKEN,
         paystack_connected: !!env.PAYSTACK_SECRET_KEY,
         database_connected: !!env.DB,
@@ -26,50 +29,35 @@ export default {
     // =========================================================
     // DIAGNOSTICS
     // =========================================================
-    if (url.pathname === "/api/diagnostics") {
+    if (
+      url.pathname === "/api/diagnostics" &&
+      request.method === "GET"
+    ) {
       try {
-        const startedAt = new Date().toISOString();
-        const biquoteConnected = await checkBiquote();
-        const catalogResponse = await fetch(
-          "https://biquote.io/api/symbols?quotedWithinDays=7"
-        );
-        const catalogResult = catalogResponse.ok
-          ? await catalogResponse.json()
-          : [];
-        const catalog = Array.isArray(catalogResult)
-          ? catalogResult
-          : catalogResult.symbols || [];
-        const discovered = await discoverSymbols();
-        const synthetic = discoverSyntheticSymbols(catalog);
+        const scan = await generateSignals({
+          returnDiagnostics: true
+        });
 
         return json({
           success: true,
           engine: "CyberFX",
           source: "Biquote",
-          scanner_ran: true,
-          started_at: startedAt,
-          finished_at: new Date().toISOString(),
-          biquote_connected: biquoteConnected,
-          main_instruments_configured: MAIN_MARKET_SYMBOLS.length,
-          total_cyberfx_markets: MAIN_MARKET_SYMBOLS.length + Object.keys(SYNTHETIC_ALIASES).length,
-          main_instruments_discovered: discovered.length,
-          synthetic_targets: Object.keys(SYNTHETIC_ALIASES),
-          synthetic_discovered: Object.fromEntries(
-            Object.entries(synthetic).map(([k, v]) => [k, v.symbol])
-          ),
-          normal_market_requests_per_scan: discovered.length * TIMEFRAMES.length,
-          synthetic_market_requests_per_scan: Object.keys(synthetic).length,
-          total_market_requests_planned:
-            discovered.length * TIMEFRAMES.length + Object.keys(synthetic).length,
           risk_reward: "1:10",
-          entry_timeframes: ENTRY_TIMEFRAMES.map(formatTF),
-          UKOIL_removed: true
+          signal_levels: [
+            "CONFIRMED"
+          ],
+          diagnostics: scan.diagnostics,
+          signals: scan.signals
         });
       } catch (error) {
+        console.error("Diagnostics error:", error);
+
         return json({
           success: false,
           engine: "CyberFX",
-          error: error?.message || String(error)
+          source: "Biquote",
+          error: error?.message || String(error),
+          diagnostics: error?.diagnostics || null
         }, 500);
       }
     }
@@ -424,17 +412,21 @@ export default {
     // =========================================================
     if (url.pathname === "/api/signals") {
       try {
+        const diagnostics = createScanDiagnostics();
         const symbols =
-          await discoverSymbols();
+          await discoverSymbols(diagnostics);
 
         const data =
-          await loadAllMarkets(symbols);
+          await loadAllMarkets(symbols, diagnostics);
+
+        finalizeScanDiagnostics(diagnostics);
 
         return json({
           success: true,
           engine: "CyberFX",
           source: "Biquote",
           risk_reward: "1:10",
+          diagnostics,
           markets: symbols,
           timeframes: TIMEFRAMES.map(
             x => x.name
@@ -462,8 +454,10 @@ export default {
       url.pathname === "/api/generate-signals"
     ) {
       try {
-        const result =
-          await generateSignals();
+        const scan =
+          await generateSignals({
+            returnDiagnostics: true
+          });
 
         return json({
           success: true,
@@ -471,11 +465,10 @@ export default {
           source: "Biquote",
           risk_reward: "1:10",
           signal_levels: [
-            "REJECTION",
-            "VALID SETUP",
             "CONFIRMED"
           ],
-          signals: result
+          diagnostics: scan.diagnostics,
+          signals: scan.signals
         });
 
       } catch (error) {
@@ -594,6 +587,7 @@ const PLANS = {
 // ============================================================
 
 const TRIAL_DAYS = 21;
+const MAX_TRADES_PER_DAY = 10;
 
 
 // ============================================================
@@ -633,31 +627,6 @@ const ENTRY_TIMEFRAMES = [
   "1h"
 ];
 
-// ============================================================
-// CYBERFX SCAN SCOPE
-// ============================================================
-// Keep the normal market scan small so one Worker invocation
-// does not hit Cloudflare's subrequest limit.
-const MAIN_MARKET_SYMBOLS = [
-  "XAUUSD",
-  "BTCUSD",
-  "USTEC",
-  "USOIL"
-];
-
-// Synthetics are handled separately with lightweight statistics.
-const SYNTHETIC_ALIASES = {
-  V75: ["V75", "VOLATILITY75", "VOLATILITY 75", "R_75", "R75"],
-  V25: ["V25", "VOLATILITY25", "VOLATILITY 25", "R_25", "R25"],
-  BOOM1000: ["BOOM1000", "BOOM 1000", "BOOM_1000"],
-  STEPINDEX: ["STEPINDEX", "STEP INDEX", "STEP_INDEX", "STP"],
-  CRASH1000: ["CRASH1000", "CRASH 1000", "CRASH_1000"]
-};
-
-const SYNTHETIC_SCAN_INTERVAL = "1m";
-const SYNTHETIC_LOOKBACK = 200;
-const BOOM_TICK_WINDOW = 1000;
-
 const CONFIRMED_SCORE = 13;
 
 
@@ -677,15 +646,43 @@ const SIGNAL_PRIORITY = {
 // ============================================================
 
 async function checkBiquote() {
+  const started = Date.now();
+
   try {
     const response =
       await fetch(
-        "https://biquote.io/health"
+        "https://biquote.io/health",
+        {
+          method: "GET",
+          headers: {
+            "cache-control": "no-cache"
+          }
+        }
       );
 
-    return response.ok;
-  } catch {
-    return false;
+    let body = null;
+
+    try {
+      body = await response.json();
+    } catch {
+      body = null;
+    }
+
+    return {
+      connected: response.ok,
+      status: response.ok ? "connected" : "error",
+      http_status: response.status,
+      latency_ms: Date.now() - started,
+      response: body
+    };
+  } catch (error) {
+    return {
+      connected: false,
+      status: "error",
+      http_status: null,
+      latency_ms: Date.now() - started,
+      error: error?.message || String(error)
+    };
   }
 }
 
@@ -694,7 +691,11 @@ async function checkBiquote() {
 // DYNAMIC SYMBOL DISCOVERY
 // ============================================================
 
-async function discoverSymbols() {
+async function discoverSymbols(diagnostics = null) {
+  if (diagnostics) {
+    diagnostics.symbol_catalog_requests++;
+  }
+
   const response =
     await fetch(
       "https://biquote.io/api/symbols?quotedWithinDays=7"
@@ -706,68 +707,188 @@ async function discoverSymbols() {
     );
   }
 
-  const result = await response.json();
+  const result =
+    await response.json();
+
   const symbols =
     Array.isArray(result)
       ? result
       : result.symbols || [];
 
-  const normalized = symbols
-    .map(item => ({
-      raw: item,
-      symbol: String(item.name || item.symbol || "").toUpperCase(),
-      type: String(item.type || "").toLowerCase(),
-      description: String(item.description || "").toLowerCase()
-    }))
-    .filter(x => x.symbol);
-
   const wanted = [];
 
-  // Only the main CyberFX market list is scanned. This prevents the
-  // previous 300+ instrument catalogue from creating 1,600+ requests.
-  for (const target of MAIN_MARKET_SYMBOLS) {
-    const found = normalized.find(x => x.symbol === target);
-    if (!found) continue;
+  for (const item of symbols) {
+    const name =
+      String(
+        item.name ||
+        item.symbol ||
+        ""
+      ).toUpperCase();
 
-    let category = "FOREX";
-    if (target === "BTCUSD") category = "CRYPTO";
-    if (["XAUUSD", "USOIL"].includes(target)) category = "COMMODITY";
-    if (target === "USTEC") category = "INDEX";
+    const type =
+      String(
+        item.type ||
+        ""
+      ).toLowerCase();
 
-    wanted.push({
-      symbol: found.symbol,
-      name: found.symbol,
-      category,
-      description: found.raw.description || found.symbol,
-      source: found.raw.source || null
-    });
-  }
+    const description =
+      String(
+        item.description ||
+        ""
+      ).toLowerCase();
 
-  return wanted;
-}
+    if (!name) {
+      continue;
+    }
 
-function discoverSyntheticSymbols(catalog) {
-  const found = {};
+    // UK OIL is permanently excluded from CyberFX.
+    if (name === "UKOIL") {
+      continue;
+    }
 
-  for (const item of catalog) {
-    const symbol = String(item.name || item.symbol || "").toUpperCase();
-    const description = String(item.description || "").toUpperCase();
-    const haystack = `${symbol} ${description}`;
+    // --------------------------------------------------------
+    // FOREX
+    // --------------------------------------------------------
 
-    for (const [kind, aliases] of Object.entries(SYNTHETIC_ALIASES)) {
-      if (found[kind]) continue;
-      if (aliases.some(alias => haystack.includes(alias))) {
-        found[kind] = {
-          symbol,
-          name: symbol,
-          category: "SYNTHETIC",
-          syntheticType: kind
-        };
-      }
+    if (
+      type === "forex" &&
+      /^[A-Z]{6}$/.test(name)
+    ) {
+      wanted.push({
+        symbol: name,
+        name: name,
+        category: "FOREX",
+        description:
+          item.description || name,
+        source:
+          item.source || null
+      });
+
+      continue;
+    }
+
+    // --------------------------------------------------------
+    // CRYPTO
+    // --------------------------------------------------------
+
+    if (
+      type === "crypto" &&
+      (
+        name === "BTCUSD" ||
+        name.includes("BTC") ||
+        name.includes("ETH") ||
+        name.includes("SOL") ||
+        description.includes("bitcoin") ||
+        description.includes("ethereum")
+      )
+    ) {
+      wanted.push({
+        symbol: name,
+        name: name,
+        category: "CRYPTO",
+        description:
+          item.description || name,
+        source:
+          item.source || null
+      });
+
+      continue;
+    }
+
+    // --------------------------------------------------------
+    // INDEX
+    // --------------------------------------------------------
+
+    if (
+      type === "index" ||
+      type === "stock"
+    ) {
+      wanted.push({
+        symbol: name,
+        name: name,
+        category:
+          type === "index"
+            ? "INDEX"
+            : "STOCK",
+        description:
+          item.description || name,
+        source:
+          item.source || null
+      });
+
+      continue;
+    }
+
+    // --------------------------------------------------------
+    // COMMODITIES
+    // --------------------------------------------------------
+
+    if (
+      type === "commodity" ||
+      name === "XAUUSD" ||
+      name === "USOIL"
+    ) {
+      wanted.push({
+        symbol: name,
+        name: name,
+        category: "COMMODITY",
+        description:
+          item.description || name,
+        source:
+          item.source || null
+      });
     }
   }
 
-  return found;
+  // Always try to preserve the main CyberFX instruments
+  // if Biquote exposes them.
+  const priority =
+    [
+      "XAUUSD",
+      "BTCUSD",
+      "USTEC",
+      "NAS100",
+      "USOIL"
+    ];
+
+  wanted.sort((a, b) => {
+    const ai =
+      priority.indexOf(a.symbol);
+
+    const bi =
+      priority.indexOf(b.symbol);
+
+    if (ai === -1 && bi === -1) {
+      return a.symbol.localeCompare(
+        b.symbol
+      );
+    }
+
+    if (ai === -1) {
+      return 1;
+    }
+
+    if (bi === -1) {
+      return -1;
+    }
+
+    return ai - bi;
+  });
+
+  // Remove duplicates.
+  const unique =
+    new Map();
+
+  for (const item of wanted) {
+    unique.set(
+      item.symbol,
+      item
+    );
+  }
+
+  return [
+    ...unique.values()
+  ];
 }
 
 
@@ -778,7 +899,7 @@ function discoverSyntheticSymbols(catalog) {
 async function getCandles(
   symbol,
   interval,
-  limit = 200
+  diagnostics = null
 ) {
   const apiUrl =
     new URL(
@@ -792,19 +913,54 @@ async function getCandles(
 
   apiUrl.searchParams.set(
     "limit",
-    String(limit)
+    "200"
   );
 
-  const response =
-    await fetch(apiUrl);
+  if (diagnostics) {
+    diagnostics.market_data_requests++;
+  }
 
-  const result =
-    await response.json();
+  let response;
+  let result;
+
+  try {
+    response = await fetch(apiUrl);
+    result = await response.json();
+  } catch (error) {
+    if (diagnostics) {
+      diagnostics.market_data_failures++;
+      diagnostics.last_market_error = {
+        symbol,
+        interval,
+        error: error?.message || String(error)
+      };
+    }
+
+    return {
+      status: "error",
+      symbol,
+      interval,
+      message: error?.message || String(error)
+    };
+  }
 
   if (
     !response.ok ||
     !Array.isArray(result.bars)
   ) {
+    if (diagnostics) {
+      diagnostics.market_data_failures++;
+      diagnostics.last_market_error = {
+        symbol,
+        interval,
+        http_status: response.status,
+        error:
+          result.message ||
+          result.error ||
+          "Biquote request failed"
+      };
+    }
+
     return {
       status: "error",
       symbol,
@@ -814,6 +970,14 @@ async function getCandles(
         result.error ||
         "Biquote request failed"
     };
+  }
+
+  if (diagnostics) {
+    diagnostics.market_data_successes++;
+    diagnostics.candles_received += result.bars.length;
+    if (result.bars.length > 0) {
+      diagnostics.successful_symbols.add(symbol);
+    }
   }
 
   return {
@@ -830,7 +994,7 @@ async function getCandles(
 // LOAD MARKET
 // ============================================================
 
-async function loadAllMarkets(symbols) {
+async function loadAllMarkets(symbols, diagnostics = null) {
   const data = {};
 
   // Keep requests controlled.
@@ -842,13 +1006,17 @@ async function loadAllMarkets(symbols) {
       metadata: item
     };
 
-    for (
-      const tf of TIMEFRAMES
-    ) {
+    for (const tf of TIMEFRAMES) {
+      // 1D is requested only on Friday for next-market-opening context.
+      if (tf.name === "1d" && new Date().getUTCDay() !== 5) {
+        continue;
+      }
+
       data[item.symbol][tf.name] =
         await getCandles(
           item.symbol,
-          tf.interval
+          tf.interval,
+          diagnostics
         );
     }
   }
@@ -858,285 +1026,124 @@ async function loadAllMarkets(symbols) {
 
 
 // ============================================================
+// SCAN DIAGNOSTICS
+// ============================================================
+
+function createScanDiagnostics() {
+  return {
+    scanner_ran: true,
+    started_at: new Date().toISOString(),
+    finished_at: null,
+    biquote_connected: false,
+    biquote_status: "unknown",
+    biquote_latency_ms: null,
+    biquote_error: null,
+    instruments_discovered: 0,
+    instruments_analyzed: 0,
+    market_data_requests: 0,
+    market_data_successes: 0,
+    market_data_failures: 0,
+    successful_symbols: new Set(),
+    candles_received: 0,
+    symbol_catalog_requests: 0,
+    signals_found: 0,
+    rejection_signals: 0,
+    valid_setup_signals: 0,
+    confirmed_signals: 0,
+    last_market_error: null
+  };
+}
+
+function finalizeScanDiagnostics(diagnostics) {
+  diagnostics.finished_at = new Date().toISOString();
+  diagnostics.successful_symbols = [
+    ...diagnostics.successful_symbols
+  ];
+  return diagnostics;
+}
+
+
+// ============================================================
 // SIGNAL ENGINE
 // ============================================================
 
-async function generateSignals() {
-  const catalogResponse =
-    await fetch(
-      "https://biquote.io/api/symbols?quotedWithinDays=7"
-    );
+async function generateSignals(options = {}) {
+  const diagnostics = createScanDiagnostics();
 
-  if (!catalogResponse.ok) {
-    throw new Error("Unable to load Biquote symbol catalogue");
+  const biquote = await checkBiquote();
+
+  diagnostics.biquote_connected = biquote.connected;
+  diagnostics.biquote_status = biquote.status;
+  diagnostics.biquote_latency_ms = biquote.latency_ms;
+  diagnostics.biquote_error = biquote.error || null;
+
+  if (!biquote.connected) {
+    diagnostics.finished_at = new Date().toISOString();
+    const error = new Error(
+      "Biquote is not connected. Market scanner cannot run."
+    );
+    error.diagnostics = finalizeScanDiagnostics(diagnostics);
+    throw error;
   }
 
-  const catalogResult = await catalogResponse.json();
-  const catalog = Array.isArray(catalogResult)
-    ? catalogResult
-    : catalogResult.symbols || [];
+  const symbols = await discoverSymbols(diagnostics);
+  diagnostics.instruments_discovered = symbols.length;
 
-  const symbols = await discoverSymbols();
-  const marketData = await loadAllMarkets(symbols);
+  const marketData = await loadAllMarkets(symbols, diagnostics);
   const results = [];
 
   for (const item of symbols) {
     const market = marketData[item.symbol];
     if (!market) continue;
 
+    diagnostics.instruments_analyzed++;
     const candidates = [];
 
     for (const entryTF of ENTRY_TIMEFRAMES) {
       const result = analyzeInstrument(item, market, entryTF);
-      if (result) candidates.push(result);
-    }
 
-    if (candidates.length) {
-      candidates.sort((a, b) => {
-        const quality = SIGNAL_PRIORITY[b.status] - SIGNAL_PRIORITY[a.status];
-        if (quality !== 0) return quality;
-        return tfPriority(b.entryTFRaw) - tfPriority(a.entryTFRaw);
-      });
-      results.push(candidates[0]);
-    }
-  }
-
-  // Synthetic scan is deliberately separate and uses one lightweight
-  // 1-minute request per synthetic instead of 5 requests per symbol.
-  const syntheticSymbols = discoverSyntheticSymbols(catalog);
-
-  for (const synthetic of Object.values(syntheticSymbols)) {
-    try {
-      const data = await getCandles(
-        synthetic.symbol,
-        SYNTHETIC_SCAN_INTERVAL,
-        SYNTHETIC_LOOKBACK
-      );
-
-      if (data.status !== "success") continue;
-
-      const signal = analyzeSynthetic(synthetic, data.candles);
-      if (signal) results.push(signal);
-    } catch (error) {
-      console.error("Synthetic scan error:", synthetic.symbol, error);
-    }
-  }
-
-  results.sort((a, b) => {
-    const priority =
-      (SIGNAL_PRIORITY[b.status] || 0) -
-      (SIGNAL_PRIORITY[a.status] || 0);
-    if (priority !== 0) return priority;
-    return new Date(b.signalTime || 0).getTime() -
-      new Date(a.signalTime || 0).getTime();
-  });
-
-  return results.slice(0, 9);
-}
-
-
-// ============================================================
-// SYNTHETIC STATISTICAL ENGINE
-// ============================================================
-// This is intentionally NOT treated like Forex/CFD structure logic.
-// It uses recent bar statistics only. It does not claim to predict a
-// synthetic spike with certainty. A signal is emitted only when the
-// statistical conditions are present.
-
-function analyzeSynthetic(item, values) {
-  const candles = normalizeCandles(values);
-  if (candles.length < 60) return null;
-
-  const current = candles[candles.length - 1];
-  const recent = candles.slice(-50);
-  const ranges = recent.map(c => c.high - c.low).filter(x => x > 0);
-  const avgRange = average(ranges);
-  if (!avgRange) return null;
-
-  const directionStats = syntheticDirectionStats(recent);
-  const rejection = detectRejection(candles, detectStructure(candles));
-  const volatilityRatio = (current.high - current.low) / avgRange;
-
-  if (item.syntheticType === "BOOM1000") {
-    const tickStats = calculateTickWindowStats(candles, BOOM_TICK_WINDOW);
-    if (!tickStats.valid) return null;
-
-    // Boom 1000: statistical setup around the 1,000-tick window.
-    // We require evidence from recent ranges and tick activity; we do
-    // not assume that a spike must occur at an exact tick.
-    if (tickStats.progress < 0.75 || volatilityRatio < 0.8) return null;
-
-    const bearish = rejection?.direction === "bearish" || directionStats.bearish > directionStats.bullish;
-    const direction = bearish ? "SELL" : "BUY";
-    return buildSyntheticStatSignal(item, current, direction, "1M", {
-      model: "1000-tick statistical window",
-      tickWindow: tickStats
-    });
-  }
-
-  if (item.syntheticType === "V75" || item.syntheticType === "V25") {
-    // Volatility 75/25: use range expansion/contraction statistics.
-    // Avoid a signal when the current bar is abnormally thin or chaotic.
-    if (volatilityRatio < 0.65 || volatilityRatio > 2.5) return null;
-
-    const direction =
-      rejection?.direction === "bullish"
-        ? "BUY"
-        : rejection?.direction === "bearish"
-          ? "SELL"
-          : directionStats.bullish >= directionStats.bearish
-            ? "BUY"
-            : "SELL";
-
-    const score =
-      (rejection ? 2 : 0) +
-      (volatilityRatio >= 0.9 && volatilityRatio <= 1.8 ? 2 : 0) +
-      (directionStats.bullish !== directionStats.bearish ? 1 : 0);
-
-    if (score < 3) return null;
-
-    return buildSyntheticStatSignal(item, current, direction, "1M", {
-      model: item.syntheticType === "V75" ? "Volatility 75 statistics" : "Volatility 25 statistics",
-      volatilityRatio: Number(volatilityRatio.toFixed(3)),
-      score
-    });
-  }
-
-  if (item.syntheticType === "STEPINDEX") {
-    const consistency = directionStats.consistency;
-    if (consistency < 0.55 || volatilityRatio < 0.50 || volatilityRatio > 2.0) return null;
-
-    const direction =
-      directionStats.bullish > directionStats.bearish ? "BUY" : "SELL";
-
-    return buildSyntheticStatSignal(item, current, direction, "1M", {
-      model: "Step Index statistical consistency",
-      consistency: Number(consistency.toFixed(3)),
-      volatilityRatio: Number(volatilityRatio.toFixed(3))
-    });
-  }
-
-  if (item.syntheticType === "CRASH1000") {
-    const tickStats = calculateTickWindowStats(candles, BOOM_TICK_WINDOW);
-    if (!tickStats.valid) return null;
-
-    // Crash 1000 uses the requested 1,000-tick statistical window.
-    // This is statistical analysis only and does not guarantee a spike.
-    if (tickStats.progress < 0.75 || volatilityRatio < 0.8) return null;
-
-    const bullish =
-      rejection?.direction === "bullish" ||
-      directionStats.bullish > directionStats.bearish;
-    const direction = bullish ? "BUY" : "SELL";
-
-    return buildSyntheticStatSignal(item, current, direction, "1M", {
-      model: "Crash 1000 1,000-tick statistical window",
-      tickWindow: tickStats
-    });
-  }
-
-  return null;
-}
-
-function syntheticDirectionStats(candles) {
-  let bullish = 0;
-  let bearish = 0;
-  let consistent = 0;
-
-  for (const candle of candles) {
-    if (candle.close > candle.open) bullish++;
-    if (candle.close < candle.open) bearish++;
-  }
-
-  const total = bullish + bearish;
-  const consistency = total ? Math.max(bullish, bearish) / total : 0;
-
-  if (total >= 3) {
-    for (let i = 1; i < candles.length; i++) {
-      const prev = candles[i - 1];
-      const cur = candles[i];
-      if (
-        (cur.close > cur.open && prev.close > prev.open) ||
-        (cur.close < cur.open && prev.close < prev.open)
-      ) {
-        consistent++;
+      // CyberFX only publishes fully CONFIRMED A+ trades.
+      if (result && result.status === "CONFIRMED") {
+        candidates.push(result);
       }
     }
+
+    if (!candidates.length) continue;
+
+    candidates.sort((a, b) => {
+      const quality = (SIGNAL_PRIORITY[b.status] || 0) - (SIGNAL_PRIORITY[a.status] || 0);
+      if (quality !== 0) return quality;
+      return tfPriority(b.entryTFRaw) - tfPriority(a.entryTFRaw);
+    });
+
+    results.push(candidates[0]);
   }
 
-  return { bullish, bearish, consistency };
-}
+  // Never publish more than 10 confirmed trades from a scan.
+  results.sort((a, b) => {
+    const aTime = new Date(a.signalTime || 0).getTime();
+    const bTime = new Date(b.signalTime || 0).getTime();
+    return bTime - aTime;
+  });
 
-function calculateTickWindowStats(candles, targetTicks) {
-  const tickVolumes = candles
-    .map(c => Number(c.tickVolume || c.volume || 0))
-    .filter(x => Number.isFinite(x) && x > 0);
+  const confirmedResults = results.slice(0, MAX_TRADES_PER_DAY);
 
-  if (!tickVolumes.length) {
-    return { valid: false, reason: "No tick-volume data" };
+  diagnostics.signals_found = confirmedResults.length;
+  diagnostics.rejection_signals = 0;
+  diagnostics.valid_setup_signals = 0;
+  diagnostics.confirmed_signals = confirmedResults.length;
+
+  finalizeScanDiagnostics(diagnostics);
+
+  if (options.returnDiagnostics) {
+    return {
+      signals: confirmedResults,
+      diagnostics
+    };
   }
 
-  let accumulated = 0;
-  for (let i = tickVolumes.length - 1; i >= 0; i--) {
-    accumulated += tickVolumes[i];
-    if (accumulated >= targetTicks) break;
-  }
-
-  return {
-    valid: accumulated > 0,
-    ticksObserved: accumulated,
-    targetTicks,
-    progress: Math.min(accumulated / targetTicks, 1)
-  };
+  return confirmedResults;
 }
-
-function buildSyntheticStatSignal(item, current, direction, entryTF, stats) {
-  const range = current.high - current.low;
-  if (!range || !Number.isFinite(range)) return null;
-
-  const entry = current.close;
-  const stopLoss =
-    direction === "BUY"
-      ? current.low - range * 0.25
-      : current.high + range * 0.25;
-
-  const risk =
-    direction === "BUY"
-      ? entry - stopLoss
-      : stopLoss - entry;
-
-  if (risk <= 0) return null;
-
-  const takeProfit =
-    direction === "BUY"
-      ? entry + risk * 10
-      : entry - risk * 10;
-
-  return {
-    instrument: item.name || item.symbol,
-    symbol: item.symbol,
-    category: "SYNTHETIC",
-    syntheticType: item.syntheticType,
-    direction,
-    orderType: direction === "BUY" ? "BUY LIMIT" : "SELL LIMIT",
-    entryTF,
-    entryTFRaw: "1min",
-    entry: roundPrice(entry),
-    stopLoss: roundPrice(stopLoss),
-    takeProfit: roundPrice(takeProfit),
-    riskReward: "1:10",
-    status: "VALID SETUP",
-    label: direction === "BUY"
-      ? "CYBERFX VALID BUY SETUP"
-      : "CYBERFX VALID SELL SETUP",
-    components: ["Synthetic Statistics"],
-    signalTime: current.time,
-    session: getTradingSession(current.time).name,
-    message: "Statistical synthetic setup; not a guaranteed spike prediction.",
-    internal: stats
-  };
-}
-
 
 // ============================================================
 // ANALYZE
@@ -1466,7 +1473,7 @@ function analyzeInstrument(
       current.time,
 
     message:
-      "GOD OVER MAN",
+      "God will man",
 
     internal: {
       score,
@@ -1664,8 +1671,8 @@ function buildRejectionSignal(
     price: roundPrice(price),
     status: "REJECTION",
     label: direction === "BUY"
-      ? "CYBERFX BUY REJECTION"
-      : "CYBERFX SELL REJECTION",
+      ? " CYBERFX BUY REJECTION"
+      : " CYBERFX SELL REJECTION",
     session: getTradingSession(current.time).name,
     signalTime: current.time,
     message: rejection.reason || (
@@ -2808,45 +2815,42 @@ function determineEntry(
 
   if (orderBlock) {
     candidates.push(
-      midpoint(
-        orderBlock.low,
-        orderBlock.high
-      )
+      midpoint(orderBlock.low, orderBlock.high)
     );
   }
 
   if (fvg) {
     candidates.push(
-      midpoint(
-        fvg.low,
-        fvg.high
-      )
+      midpoint(fvg.low, fvg.high)
     );
   }
 
-  if (fib) {
-    candidates.push(
-      fib["50"]
-    );
+  if (fib && Number.isFinite(fib["50"])) {
+    candidates.push(fib["50"]);
   }
 
-  if (!candidates.length) {
-    return currentPrice;
-  }
-
-  candidates.sort(
-    (a, b) =>
-      Math.abs(
-        a - currentPrice
-      ) -
-      Math.abs(
-        b - currentPrice
-      )
+  // CyberFX uses fixed LIMIT entries only.
+  // BUY entries must be below current price.
+  // SELL entries must be above current price.
+  const valid = candidates.filter(price =>
+    Number.isFinite(price) && (
+      direction === "bullish"
+        ? price < currentPrice
+        : price > currentPrice
+    )
   );
 
-  return candidates[0];
-}
+  if (!valid.length) {
+    return null;
+  }
 
+  // Choose the nearest valid retracement zone without chasing price.
+  valid.sort((a, b) =>
+    Math.abs(a - currentPrice) - Math.abs(b - currentPrice)
+  );
+
+  return valid[0];
+}
 
 // ============================================================
 // STOP LOSS
@@ -3801,78 +3805,59 @@ async function handleTelegramMessage(
         env
       );
 
-    const welcome = `CYBERFX
-
-Welcome to the CyberFX automated market signal engine.
-
-MARKETS SCANNED
-
-1. XAUUSD — GOLD
-2. BTCUSD — BITCOIN
-3. USTEC — US TECH / NASDAQ
-4. USOIL — US OIL
-5. VOLATILITY 75 INDEX
-6. VOLATILITY 25 INDEX
-7. BOOM 1000 INDEX
-8. STEP INDEX
-9. CRASH 1000 INDEX
-
-SIGNAL TYPES
-BUY REJECTION
-SELL REJECTION
-VALID BUY SETUP
-VALID SELL SETUP
-CONFIRMED BUY
-CONFIRMED SELL
-
-ENTRY TIMEFRAMES
-15M • 30M • 1H
-
-HIGHER-TIMEFRAME ANALYSIS
-4H • 1D
-
-RISK/REWARD
-1:10`;
-
     if (access.owner) {
       await sendTelegramMessage(
         chatId,
-        `${welcome}
+        `CYBERFX OWNER
 
 Owner access is active.
 
-Use /signals for a manual scan.
-Use /subscribe for subscription information.`,
+Automatic scanning is enabled.
+
+Markets:
+Gold, BTC, US Tech, US Oil and supported Forex pairs.
+
+Synthetics: COMING SOON
+
+Use /signals for a manual scan.`,
         env.TELEGRAM_BOT_TOKEN
       );
+
       return;
     }
 
     if (access.authorized) {
       await sendTelegramMessage(
         chatId,
-        `${welcome}
+        `CYBERFX
 
 Your access is active.
+
 Automatic signals are enabled.
 
-Use /signals for the current scan.
-Use /subscribe for subscription information.`,
+Markets:
+Gold, BTC, US Tech, US Oil and supported Forex pairs.
+
+Synthetics: COMING SOON
+
+Use /signals for the current scan.`,
         env.TELEGRAM_BOT_TOKEN
       );
+
       return;
     }
 
     await sendTelegramMessage(
       chatId,
-      `${welcome}
+      `CYBERFX
 
-Your access is currently inactive.
+Access denied.
 
-Subscribe/register here:
-${WEBSITE_URL}
+You need an active CyberFX trial or paid subscription linked to this Telegram account.
 
-New users receive a 21-day free trial.`,
+Subscribe/register:
+
+${WEBSITE_URL}`,
       env.TELEGRAM_BOT_TOKEN
     );
 
@@ -3886,7 +3871,7 @@ New users receive a 21-day free trial.`,
   if (text === "/subscribe") {
     await sendTelegramMessage(
       chatId,
-      `CYBERFX
+      ` CYBERFX
 
 Register and subscribe here:
 
@@ -3932,22 +3917,27 @@ ${WEBSITE_URL}`,
     }
 
     try {
-      const signals =
-        await generateSignals();
+      const scan =
+        await generateSignals({
+          returnDiagnostics: true
+        });
 
-      const active =
-        signals.filter(
-          signal =>
-            signal.status !==
-            "NO SIGNAL"
-        );
+      const active = scan.signals;
 
       if (!active.length) {
+        const d = scan.diagnostics;
+
         await sendTelegramMessage(
           chatId,
-          `CYBERFX
+          `CYBERFX SCAN REPORT
 
-No active rejection, valid setup, or confirmed setup at the moment.`,
+Scanner ran: YES
+Instruments analyzed: ${d.instruments_analyzed}
+Market-data requests: ${d.market_data_requests}
+Successful market-data requests: ${d.market_data_successes}
+Biquote connection: ${d.biquote_connected ? "CONNECTED" : "NOT CONNECTED"}
+
+No active trade / no confirmed A-Plus setup was found in this scan.`,
           env.TELEGRAM_BOT_TOKEN
         );
 
@@ -3995,12 +3985,17 @@ Signal engine temporarily unavailable.`,
 
 Commands:
 
-/start - Check access
-/signals - Manual signal scan
-/subscribe - Subscription/trial
-/help - Show commands
+/start — Check access
+/signals — Manual signal scan
+/subscribe — Subscription/trial
+/help — Show commands
 
-Active users receive new signals automatically.`,
+Markets:
+Gold, BTC, US Tech, US Oil and supported Forex pairs.
+
+Synthetics: COMING SOON
+
+Only confirmed A+ signals are sent.`,
       env.TELEGRAM_BOT_TOKEN
     );
   }
@@ -4023,19 +4018,22 @@ async function runAutomaticScan(
   }
 
   try {
-    const signals =
-      await generateSignals();
+    const scan =
+      await generateSignals({
+        returnDiagnostics: true
+      });
+
+    const signals = scan.signals;
 
     const active =
       signals.filter(
-        signal =>
-          signal.status !==
-          "NO SIGNAL"
+        signal => signal.status === "CONFIRMED"
       );
 
     if (!active.length) {
       console.log(
-        "CYBERFX: No active signals."
+        "CYBERFX: Scanner ran but found no active signals.",
+        JSON.stringify(scan.diagnostics)
       );
 
       return;
@@ -4046,9 +4044,20 @@ async function runAutomaticScan(
         env
       );
 
+    let sentToday = await countSignalsSentToday(env);
+
+    if (sentToday >= MAX_TRADES_PER_DAY) {
+      console.log(`CYBERFX: Daily trade limit reached (${MAX_TRADES_PER_DAY}).`);
+      return;
+    }
+
     for (
       const signal of active
     ) {
+      if (sentToday >= MAX_TRADES_PER_DAY) {
+        break;
+      }
+
       const signature =
         createSignalSignature(
           signal
@@ -4088,6 +4097,7 @@ async function runAutomaticScan(
           signal,
           env
         );
+        sentToday++;
       }
     }
 
@@ -4157,6 +4167,25 @@ async function ensureSentSignalsTable(
     )
   `)
     .run();
+}
+
+
+async function countSignalsSentToday(env) {
+  if (!env.DB) return 0;
+
+  try {
+    await ensureSentSignalsTable(env);
+
+    const row = await env.DB.prepare(`
+      SELECT COUNT(*) AS count
+      FROM sent_signals
+      WHERE sent_at >= date('now')
+    `).first();
+
+    return Number(row?.count || 0);
+  } catch {
+    return 0;
+  }
 }
 
 
@@ -4248,67 +4277,13 @@ async function markSignalSent(
 
 
 // ============================================================
-// MARKET / EXPECTED TRIGGER DATE
-// ============================================================
-// Signals are based on the latest CLOSED candle. If a normal
-// market is closed (weekend/holiday), the signal is marked with
-// an expected trigger date instead of pretending it can trigger
-// while the market is closed. Synthetics are treated separately
-// because they are designed to trade continuously.
-
-function isWeekendUTC(date) {
-  const day = date.getUTCDay();
-  return day === 0 || day === 6;
-}
-
-function nextBusinessDayUTC(date) {
-  const result = new Date(date);
-  result.setUTCHours(12, 0, 0, 0);
-  do {
-    result.setUTCDate(result.getUTCDate() + 1);
-  } while (isWeekendUTC(result));
-  return result;
-}
-
-function getExpectedTriggerDate(signal) {
-  if (signal?.category === "SYNTHETIC") {
-    return null;
-  }
-
-  const raw = signal?.signalTime || new Date().toISOString();
-  const date = new Date(raw);
-  if (Number.isNaN(date.getTime())) return null;
-
-  // The signal is based on a closed candle. On weekends, the
-  // next normal business session is the next possible trigger date.
-  if (isWeekendUTC(date)) {
-    return nextBusinessDayUTC(date).toISOString().slice(0, 10);
-  }
-
-  return date.toISOString().slice(0, 10);
-}
-
-function isNormalMarketClosed(signal) {
-  if (!signal || signal.category === "SYNTHETIC" || signal.category === "CRYPTO") {
-    return false;
-  }
-
-  const date = new Date(signal.signalTime || Date.now());
-  if (Number.isNaN(date.getTime())) return false;
-  return isWeekendUTC(date);
-}
-
-// ============================================================
 // TELEGRAM FORMAT
 // ============================================================
 
 function formatTelegramSignal(
   signal
 ) {
-  if (
-    signal.status ===
-    "REJECTION"
-  ) {
+  if (signal.status === "REJECTION") {
     return `CYBERFX ${signal.direction} REJECTION
 
 ${signal.instrument}
@@ -4321,17 +4296,13 @@ Current Price: ${signal.price}
 
 ${signal.message}
 
-${isNormalMarketClosed(signal) ? `EXPECTED TRIGGER DATE: ${getExpectedTriggerDate(signal)}` : ""}
 DEVELOPING OPPORTUNITY`;
   }
 
-  if (
-    signal.status ===
-    "VALID SETUP"
-  ) {
-    return `CYBERFX VALID SETUP
+  if (signal.status === "VALID SETUP") {
+    return `CYBERFX VALID ${signal.direction} SETUP
 
-${signal.instrument} — ${signal.direction}
+${signal.instrument}
 
 Order: ${signal.orderType}
 
@@ -4347,28 +4318,20 @@ Risk/Reward: 1:10
 
 Session: ${signal.session}
 
-${isNormalMarketClosed(signal) ? `EXPECTED TRIGGER DATE: ${getExpectedTriggerDate(signal)}\n` : ""}
 Setup:
 ${
   signal.components?.length
-    ? signal.components
-        .map(
-          x => `• ${x}`
-        )
-        .join("\n")
-    : "• Developing structure"
+    ? signal.components.map(x => `- ${x}`).join("\n")
+    : "- Developing structure"
 }
 
-VALID SETUP — AWAITING FULL CONFIRMATION`;
+VALID SETUP - AWAITING FULL CONFIRMATION`;
   }
 
-  if (
-    signal.status ===
-    "CONFIRMED"
-  ) {
+  if (signal.status === "CONFIRMED") {
     return `CYBERFX A+ CONFIRMED
 
-${signal.instrument} — ${signal.direction}
+${signal.instrument} - ${signal.direction}
 
 Order: ${signal.orderType}
 
@@ -4384,10 +4347,9 @@ Risk/Reward: 1:10
 
 Session: ${signal.session}
 
-${isNormalMarketClosed(signal) ? `EXPECTED TRIGGER DATE: ${getExpectedTriggerDate(signal)}\n` : ""}
 A+ CONFIRMED
 
-GOD OVER MAN`;
+God will man`;
   }
 
   return `CYBERFX
