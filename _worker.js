@@ -6,19 +6,22 @@ export default {
     // HEALTH
     // =========================================================
     if (url.pathname === "/api/health") {
-      const biquoteConnected = await checkBiquote();
+      const bybitConnected = await checkBybit();
 
       return json({
         success: true,
         engine: "CyberFX",
-        version: "2.2.0",
+        version: "3.1.0-bybit-alchemist",
         status: "online",
-        market_data: "Biquote",
-        biquote_connected: biquoteConnected,
+        market_data: "Bybit Public API",
+        bybit_connected: bybitConnected,
         telegram_connected: !!env.TELEGRAM_BOT_TOKEN,
         paystack_connected: !!env.PAYSTACK_SECRET_KEY,
         database_connected: !!env.DB,
-        risk_reward: "1:10",
+        strategy: "Alchemist",
+        instruments: ["XAUUSD", "BTCUSD"],
+        session_timezone: "America/New_York",
+        risk_reward: "swing-target-based",
         trial_days: 21
       });
     }
@@ -355,7 +358,7 @@ export default {
         return json({
           success: true,
           engine: "CyberFX",
-          source: "Biquote",
+          source: "Bybit Public API",
           count: symbols.length,
           symbols
         });
@@ -382,8 +385,9 @@ export default {
         return json({
           success: true,
           engine: "CyberFX",
-          source: "Biquote",
-          risk_reward: "1:10",
+          source: "Bybit Public API",
+          strategy: "Alchemist",
+          risk_reward: "swing-target-based",
           markets: symbols,
           timeframes: TIMEFRAMES.map(
             x => x.name
@@ -417,13 +421,16 @@ export default {
         return json({
           success: true,
           engine: "CyberFX",
-          source: "Biquote",
-          risk_reward: "1:10",
+          source: "Bybit Public API",
+          strategy: "Alchemist",
+          instruments: ["XAUUSD", "BTCUSD"],
+          risk_reward: "swing-target-based",
           signal_levels: [
+            "REJECTION",
+            "VALID SETUP",
             "CONFIRMED"
           ],
-          signals: result.signals,
-          diagnostics: result.diagnostics
+          signals: result
         });
 
       } catch (error) {
@@ -436,38 +443,6 @@ export default {
           success: false,
           error: error?.message || String(error)
         }, 500);
-      }
-    }
-
-    // =========================================================
-    // ENGINE DIAGNOSTICS
-    // =========================================================
-    if (
-      url.pathname === "/api/diagnostics" &&
-      request.method === "GET"
-    ) {
-      try {
-        const result = await generateSignals();
-        return json({
-          success: true,
-          engine: "CyberFX",
-          version: "2.2.0",
-          biquote_connected: result.diagnostics.biquote.connected,
-          telegram_configured: !!env.TELEGRAM_BOT_TOKEN,
-          database_configured: !!env.DB,
-          signals_found: result.signals.length,
-          diagnostics: result.diagnostics
-        });
-      } catch (error) {
-        return json({
-          success: false,
-          engine: "CyberFX",
-          version: "2.2.0",
-          biquote_connected: await checkBiquote(),
-          telegram_configured: !!env.TELEGRAM_BOT_TOKEN,
-          database_configured: !!env.DB,
-          error: error?.message || String(error)
-        }, 502);
       }
     }
 
@@ -581,44 +556,22 @@ const TRIAL_DAYS = 21;
 // ============================================================
 
 const TIMEFRAMES = [
-  {
-    name: "15min",
-    interval: "15m"
-  },
-
-  {
-    name: "30min",
-    interval: "30m"
-  },
-
-  {
-    name: "1h",
-    interval: "1h"
-  },
-
-  {
-    name: "4h",
-    interval: "4h"
-  },
-
-  {
-    name: "1d",
-    interval: "1d"
-  }
+  { name: "1min", interval: "1m" },
+  { name: "5min", interval: "5m" },
+  { name: "15min", interval: "15m" },
+  { name: "30min", interval: "30m" },
+  { name: "1h", interval: "1h" },
+  { name: "4h", interval: "4h" },
+  { name: "1d", interval: "1d" }
 ];
 
+// Flexible entry timeframes. The signal reports the exact timeframe
+// on which the Alchemist trigger was confirmed.
 const ENTRY_TIMEFRAMES = [
+  "1min",
+  "5min",
   "15min",
-  "30min",
-  "1h"
-];
-
-const ANALYSIS_TIMEFRAMES = [
-  "15min",
-  "30min",
-  "1h",
-  "4h",
-  "1d"
+  "30min"
 ];
 
 const CONFIRMED_SCORE = 13;
@@ -636,123 +589,179 @@ const SIGNAL_PRIORITY = {
 
 
 // ============================================================
-// Biquote HEALTH
+// BYBIT PUBLIC API HEALTH
 // ============================================================
 
-async function checkBiquote() {
+async function checkBybit() {
+  // Public market-data endpoints require no API key.
+  // Health is true only when both configured instruments return candles.
   try {
-    const response =
-      await fetch(
-        "https://biquote.io/health"
-      );
-
-    return response.ok;
+    const checks = await Promise.all([
+      getCandles("XAUUSD", "1m"),
+      getCandles("BTCUSD", "1m")
+    ]);
+    return checks.every(item =>
+      item && item.status === "success" &&
+      Array.isArray(item.candles) && item.candles.length > 0
+    );
   } catch {
     return false;
   }
 }
-
 
 // ============================================================
 // DYNAMIC SYMBOL DISCOVERY
 // ============================================================
 
 async function discoverSymbols() {
-  // CyberFX scans ONLY these four approved markets.
-  // Do NOT expand this list from the Biquote catalogue.
-  const approved = [
+  // Public names used by CyberFX remain XAUUSD and BTCUSD.
+  // Bybit's actual public market symbols/categories are mapped separately.
+  return [
     {
       symbol: "XAUUSD",
-      name: "GOLD",
+      name: "XAUUSD",
       category: "COMMODITY",
-      description: "Gold"
+      description: "Gold versus US Dollar",
+      source: "Bybit Public API",
+      apiSymbol: "XAUUSDT",
+      apiCategory: "linear"
     },
     {
       symbol: "BTCUSD",
-      name: "BTC",
+      name: "BTCUSD",
       category: "CRYPTO",
-      description: "Bitcoin"
-    },
-    {
-      symbol: "USTEC",
-      name: "US TECH",
-      category: "INDEX",
-      description: "US Tech Index"
-    },
-    {
-      symbol: "USOIL",
-      name: "US OIL",
-      category: "COMMODITY",
-      description: "US Oil"
+      description: "Bitcoin versus US Dollar",
+      source: "Bybit Public API",
+      apiSymbol: "BTCUSD",
+      apiCategory: "inverse"
     }
   ];
-
-  return approved;
 }
 
 // ============================================================
-// CANDLES
+// BYBIT V5 PUBLIC CANDLE DATA
 // ============================================================
 
-async function getCandles(
-  symbol,
-  interval
-) {
-  const apiUrl =
-    new URL(
-      `https://biquote.io/api/${encodeURIComponent(symbol)}/ohlc`
+const BYBIT_BASE_URL = "https://api.bybit.com";
+
+const BYBIT_INTERVALS = {
+  "1m": { api: "1", ms: 60_000 },
+  "5m": { api: "5", ms: 5 * 60_000 },
+  "15m": { api: "15", ms: 15 * 60_000 },
+  "30m": { api: "30", ms: 30 * 60_000 },
+  "1h": { api: "60", ms: 60 * 60_000 },
+  "4h": { api: "240", ms: 4 * 60 * 60_000 },
+  "1d": { api: "D", ms: 24 * 60 * 60_000 }
+};
+
+function bybitInstrumentFor(symbol) {
+  if (symbol === "XAUUSD") {
+    // XAUUSDT is the Bybit gold/USDT TradFi market if listed for this account/API region.
+    // Do not silently substitute XAUTUSDT (a tokenized-gold product).
+    return { symbol: "XAUUSDT", category: "linear" };
+  }
+  if (symbol === "BTCUSD") {
+    return { symbol: "BTCUSD", category: "inverse" };
+  }
+  throw new Error(`Unsupported CyberFX instrument: ${symbol}`);
+}
+
+async function getCandles(symbol, interval) {
+  const instrument = bybitInstrumentFor(symbol);
+  const tf = BYBIT_INTERVALS[interval] || BYBIT_INTERVALS[
+    TIMEFRAMES.find(item => item.name === interval)?.interval
+  ];
+  if (!tf) {
+    return { status: "error", symbol, interval, message: `Unsupported Bybit interval: ${interval}` };
+  }
+
+  const apiUrl = new URL(`${BYBIT_BASE_URL}/v5/market/kline`);
+  apiUrl.searchParams.set("category", instrument.category);
+  apiUrl.searchParams.set("symbol", instrument.symbol);
+  apiUrl.searchParams.set("interval", tf.api);
+  apiUrl.searchParams.set("limit", "200");
+
+  try {
+    const response = await fetch(apiUrl.toString(), {
+      headers: { "Accept": "application/json" }
+    });
+    let result;
+    try {
+      result = await response.json();
+    } catch {
+      result = {};
+    }
+
+    const rows = result?.result?.list;
+    if (!response.ok || result?.retCode !== 0 || !Array.isArray(rows)) {
+      return {
+        status: "error",
+        symbol,
+        interval,
+        api_symbol: instrument.symbol,
+        api_category: instrument.category,
+        message: result?.retMsg || result?.message || result?.error || `Bybit request failed (HTTP ${response.status})`
+      };
+    }
+
+    const now = Date.now();
+    const candles = rows.map(row => {
+      const startMs = Number(row?.[0]);
+      const isOpen = Number.isFinite(startMs) && (startMs + tf.ms > now);
+      return {
+        openTime: Number.isFinite(startMs) ? new Date(startMs).toISOString() : null,
+        timestamp: Number.isFinite(startMs) ? startMs : null,
+        open: Number(row?.[1]),
+        high: Number(row?.[2]),
+        low: Number(row?.[3]),
+        close: Number(row?.[4]),
+        volume: Number(row?.[5] || 0),
+        isOpen
+      };
+    }).filter(c =>
+      c.openTime && Number.isFinite(c.open) && Number.isFinite(c.high) &&
+      Number.isFinite(c.low) && Number.isFinite(c.close)
     );
 
-  apiUrl.searchParams.set(
-    "interval",
-    interval
-  );
+    if (!candles.length) {
+      return {
+        status: "error", symbol, interval,
+        api_symbol: instrument.symbol,
+        api_category: instrument.category,
+        message: `Bybit returned no valid candles for ${instrument.symbol}`
+      };
+    }
 
-  apiUrl.searchParams.set(
-    "limit",
-    "200"
-  );
-
-  const response =
-    await fetch(apiUrl);
-
-  const result =
-    await response.json();
-
-  if (
-    !response.ok ||
-    !Array.isArray(result.bars)
-  ) {
+    return {
+      status: "success",
+      symbol,
+      interval,
+      api_symbol: instrument.symbol,
+      api_category: instrument.category,
+      source: "Bybit Public API",
+      candles
+    };
+  } catch (error) {
     return {
       status: "error",
       symbol,
       interval,
-      message:
-        result.message ||
-        result.error ||
-        "Biquote request failed"
+      api_symbol: instrument.symbol,
+      api_category: instrument.category,
+      message: error?.message || String(error)
     };
   }
-
-  return {
-    status: "success",
-    symbol,
-    interval,
-    candles:
-      result.bars
-  };
 }
-
 
 // ============================================================
 // LOAD MARKET
 // ============================================================
 
-async function loadAllMarkets(symbols, diagnostics = null) {
+async function loadAllMarkets(symbols) {
   const data = {};
 
   // Keep requests controlled.
-  // Biquote supports these OHLC intervals directly.
+  // Bybit V5 public Kline endpoint supports these mapped intervals.
   for (
     const item of symbols
   ) {
@@ -768,15 +777,6 @@ async function loadAllMarkets(symbols, diagnostics = null) {
           item.symbol,
           tf.interval
         );
-
-      if (diagnostics) {
-        diagnostics.marketRequests += 1;
-        if (data[item.symbol][tf.name]?.status === "success") {
-          diagnostics.marketSuccess += 1;
-        } else {
-          diagnostics.marketErrors += 1;
-        }
-      }
     }
   }
 
@@ -788,97 +788,476 @@ async function loadAllMarkets(symbols, diagnostics = null) {
 // SIGNAL ENGINE
 // ============================================================
 
-async function generateSignals(options = {}) {
-  const diagnostics = {
-    startedAt: new Date().toISOString(),
-    biquote: {
-      connected: false,
-      symbolsLoaded: 0
-    },
-    symbols: 0,
-    marketRequests: 0,
-    marketSuccess: 0,
-    marketErrors: 0,
-    instrumentsAnalyzed: 0,
-    candidatesFound: 0,
-    resultsFound: 0,
-    errors: []
-  };
-
-  diagnostics.biquote.connected = await checkBiquote();
-
-  if (!diagnostics.biquote.connected) {
-    throw new Error(
-      "Biquote market-data service is not reachable from the Worker"
-    );
+async function generateSignals() {
+  // Never generate Alchemist entries outside the two permitted killzones.
+  const now = new Date();
+  if (!isAlchemistTradingWindow(now)) {
+    return [];
   }
 
-  let symbols;
-  try {
-    symbols = await discoverSymbols();
-  } catch (error) {
-    diagnostics.errors.push(error?.message || String(error));
-    throw error;
-  }
-
-  diagnostics.symbols = symbols.length;
-  diagnostics.biquote.symbolsLoaded = symbols.length;
-
-  if (!symbols.length) {
-    return {
-      signals: [],
-      diagnostics: {
-        ...diagnostics,
-        completedAt: new Date().toISOString(),
-        reason: "Biquote returned no supported symbols"
-      }
-    };
-  }
-
-  const marketData = await loadAllMarkets(symbols, diagnostics);
+  const symbols = await discoverSymbols();
+  const marketData = await loadAllMarkets(symbols);
   const results = [];
 
   for (const item of symbols) {
     const market = marketData[item.symbol];
     if (!market) continue;
 
-    diagnostics.instrumentsAnalyzed += 1;
     const candidates = [];
-
     for (const entryTF of ENTRY_TIMEFRAMES) {
-      const result = analyzeInstrument(item, market, entryTF);
-      if (result) {
-        candidates.push(result);
-        diagnostics.candidatesFound += 1;
+      const signal = analyzeAlchemistInstrument(item, market, entryTF, now);
+      if (signal) candidates.push(signal);
+    }
+
+    // One clearest confirmed signal per instrument per scan.
+    candidates.sort((a, b) => {
+      const modulePriority = (b.modulePriority || 0) - (a.modulePriority || 0);
+      if (modulePriority) return modulePriority;
+      return tfPriority(b.entryTFRaw) - tfPriority(a.entryTFRaw);
+    });
+
+    if (candidates.length) results.push(candidates[0]);
+  }
+
+  return results;
+}
+
+
+// ============================================================
+// ALCHEMIST STRATEGY ENGINE
+// Operational rules are based on the strategy description supplied
+// by the user: HTF MSNR level interaction plus one of four triggers.
+// ============================================================
+
+function analyzeAlchemistInstrument(item, market, entryTF, now = new Date()) {
+  const entryData = market[entryTF];
+  if (!entryData || entryData.status !== "success" || !Array.isArray(entryData.candles)) return null;
+
+  const candles = normalizeCandles(entryData.candles).filter(c => !c.isOpen);
+  if (candles.length < 40) return null;
+
+  const current = candles[candles.length - 1];
+  const atr = ATR(candles);
+  if (!atr || !Number.isFinite(current.close)) return null;
+
+  const entryMinutes = timeframeMinutes(entryTF);
+  const htfLevels = getHigherTimeframeLevels(market, entryMinutes);
+  const touchTolerance = Math.max(atr * 0.45, Math.abs(current.close) * 0.00015);
+  const touchedLevel = findRecentHigherTimeframeTouch(candles, htfLevels, touchTolerance, 5);
+  if (!touchedLevel) return null;
+
+  const setup = detectAlchemistTrigger(candles, touchedLevel, atr);
+  if (!setup) return null;
+
+  const direction = setup.direction;
+  const entry = Number.isFinite(setup.entry) ? setup.entry : current.close;
+  const recent = candles.slice(-35);
+  const stopSwing = direction === "BUY"
+    ? Math.min(...recent.map(c => c.low))
+    : Math.max(...recent.map(c => c.high));
+  const stopLoss = direction === "BUY"
+    ? stopSwing - atr * 0.15
+    : stopSwing + atr * 0.15;
+
+  if (!Number.isFinite(entry) || !Number.isFinite(stopLoss)) return null;
+  if ((direction === "BUY" && stopLoss >= entry) || (direction === "SELL" && stopLoss <= entry)) return null;
+
+  const target = findSwingTarget(candles, direction, entry, htfLevels);
+  if (!Number.isFinite(target)) return null;
+  if ((direction === "BUY" && target <= entry) || (direction === "SELL" && target >= entry)) return null;
+
+  const risk = Math.abs(entry - stopLoss);
+  const reward = Math.abs(target - entry);
+  const rr = risk > 0 ? `1:${(reward / risk).toFixed(2)}` : "N/A";
+  const nySession = getTradingSession(now).name;
+
+  return {
+    instrument: item.name,
+    symbol: item.symbol,
+    category: item.category,
+    direction,
+    orderType: "MARKET / LEVEL RETEST",
+    entryTF: formatTF(entryTF),
+    entryTFRaw: entryTF,
+    entry: roundPrice(entry),
+    stopLoss: roundPrice(stopLoss),
+    takeProfit: roundPrice(target),
+    riskReward: rr,
+    status: "CONFIRMED",
+    setupType: setup.name,
+    modulePriority: setup.priority,
+    htfLevel: roundPrice(touchedLevel.price),
+    components: ["Higher-timeframe MSNR level interaction", setup.name],
+    signalTime: current.time || now.toISOString(),
+    session: nySession,
+    managementNote: "Consider moving Stop Loss to Break-Even only when price has moved sufficiently in your favour and market structure supports protecting capital."
+  };
+}
+
+function detectAlchemistTrigger(candles, touchedLevel, atr) {
+  const modules = [
+    detectQuasimodo(candles, atr),
+    detectStructuralFlip(candles, atr),
+    detectOrderBlockFVG(candles, atr),
+    detectThirdTouchTrendline(candles, touchedLevel, atr)
+  ].filter(Boolean);
+
+  if (!modules.length) return null;
+  // Prefer the clearest available module. All modules still require the HTF touch.
+  modules.sort((a, b) => b.priority - a.priority);
+  return modules[0];
+}
+
+function findSwingPoints(candles, left = 2, right = 2, lookback = 100) {
+  const highs = [];
+  const lows = [];
+  const start = Math.max(left, candles.length - lookback);
+  for (let i = start; i < candles.length - right; i++) {
+    let isHigh = true;
+    let isLow = true;
+    for (let j = i - left; j <= i + right; j++) {
+      if (j === i) continue;
+      if (candles[j].high >= candles[i].high) isHigh = false;
+      if (candles[j].low <= candles[i].low) isLow = false;
+    }
+    if (isHigh) highs.push({ index: i, price: candles[i].high, time: candles[i].time });
+    if (isLow) lows.push({ index: i, price: candles[i].low, time: candles[i].time });
+  }
+  return { highs, lows };
+}
+
+function timeframeMinutes(tf) {
+  return ({ "1min": 1, "5min": 5, "15min": 15, "30min": 30, "1h": 60, "4h": 240, "1d": 1440 })[tf] || 15;
+}
+
+function getHigherTimeframeLevels(market, entryMinutes, now = new Date()) {
+  const levels = getAsianRangeLevels(market, now);
+  for (const tf of TIMEFRAMES) {
+    if (timeframeMinutes(tf.name) <= entryMinutes) continue;
+    if (!["5min", "15min", "30min", "1h", "4h", "1d"].includes(tf.name)) continue;
+    const data = market[tf.name];
+    if (!data || data.status !== "success" || !Array.isArray(data.candles)) continue;
+    const candles = normalizeCandles(data.candles).filter(c => !c.isOpen);
+    if (candles.length < 12) continue;
+    const swings = findSwingPoints(candles, 2, 2, 80);
+    for (const x of swings.highs.slice(-8)) levels.push({ price: x.price, type: "resistance", timeframe: tf.name });
+    for (const x of swings.lows.slice(-8)) levels.push({ price: x.price, type: "support", timeframe: tf.name });
+    const recent = candles.slice(-30);
+    if (recent.length) {
+      levels.push({ price: Math.max(...recent.map(c => c.high)), type: "range high", timeframe: tf.name });
+      levels.push({ price: Math.min(...recent.map(c => c.low)), type: "range low", timeframe: tf.name });
+    }
+  }
+  const unique = new Map();
+  for (const level of levels) {
+    if (Number.isFinite(level.price)) unique.set(`${level.timeframe}:${level.type}:${level.price.toFixed(5)}`, level);
+  }
+  return [...unique.values()];
+}
+
+function findRecentHigherTimeframeTouch(candles, levels, tolerance, barsBack = 5) {
+  if (!levels.length) return null;
+  const start = Math.max(0, candles.length - barsBack);
+  for (let i = candles.length - 1; i >= start; i--) {
+    const candle = candles[i];
+    const touched = levels
+      .filter(level => candle.low <= level.price + tolerance && candle.high >= level.price - tolerance)
+      .sort((a, b) => Math.abs(candle.close - a.price) - Math.abs(candle.close - b.price));
+    if (touched.length) return { ...touched[0], candleIndex: i };
+  }
+  return null;
+}
+
+function detectQuasimodo(candles, atr) {
+  const n = candles.length;
+  if (n < 15) return null;
+  const recentStart = n - 5;
+  const prior = candles.slice(0, n - 5);
+  const swings = findSwingPoints(prior, 2, 2, 80);
+  const recent = candles.slice(recentStart);
+  const internal = findSwingPoints(candles.slice(-18, -2), 1, 1, 18);
+  const last = candles[n - 1];
+
+  const lowSweep = swings.lows.slice(-8).find(s => recent.some(c => c.low < s.price - atr * 0.05 && c.close > s.price));
+  const internalHigh = internal.highs.filter(s => s.index >= 0).slice(-1)[0];
+  if (lowSweep && internalHigh && last.close > internalHigh.price) {
+    return { name: "Quasimodo (QM) — bullish sweep + MSS", direction: "BUY", entry: lowSweep.price, priority: 4 };
+  }
+
+  const highSweep = swings.highs.slice(-8).find(s => recent.some(c => c.high > s.price + atr * 0.05 && c.close < s.price));
+  const internalLow = internal.lows.slice(-1)[0];
+  if (highSweep && internalLow && last.close < internalLow.price) {
+    return { name: "Quasimodo (QM) — bearish sweep + MSS", direction: "SELL", entry: highSweep.price, priority: 4 };
+  }
+  return null;
+}
+
+function detectStructuralFlip(candles, atr) {
+  const n = candles.length;
+  if (n < 15) return null;
+  const last = candles[n - 1];
+  const prev = candles[n - 2];
+  const swings = findSwingPoints(candles.slice(0, n - 3), 2, 2, 80);
+  const tolerance = Math.max(atr * 0.25, Math.abs(last.close) * 0.0001);
+
+  for (const swing of swings.highs.slice(-10).reverse()) {
+    const broke = candles.slice(Math.max(0, swing.index + 1), n - 1).some(c => c.close > swing.price + tolerance * 0.15);
+    const retested = last.low <= swing.price + tolerance && last.close > swing.price && (prev.low <= swing.price + tolerance || last.low <= swing.price);
+    if (broke && retested) return { name: "Structural Flip — RBS retest", direction: "BUY", entry: swing.price, priority: 3 };
+  }
+
+  for (const swing of swings.lows.slice(-10).reverse()) {
+    const broke = candles.slice(Math.max(0, swing.index + 1), n - 1).some(c => c.close < swing.price - tolerance * 0.15);
+    const retested = last.high >= swing.price - tolerance && last.close < swing.price && (prev.high >= swing.price - tolerance || last.high >= swing.price);
+    if (broke && retested) return { name: "Structural Flip — SBR retest", direction: "SELL", entry: swing.price, priority: 3 };
+  }
+  return null;
+}
+
+function detectOrderBlockFVG(candles, atr) {
+  const n = candles.length;
+  if (n < 12) return null;
+  const last = candles[n - 1];
+  const tolerance = Math.max(atr * 0.3, Math.abs(last.close) * 0.0001);
+  const from = Math.max(2, n - 12);
+
+  for (let i = n - 3; i >= from; i--) {
+    // Bullish FVG: candle i high is below candle i+2 low.
+    if (candles[i].high < candles[i + 2].low) {
+      const fvgLow = candles[i].high;
+      const fvgHigh = candles[i + 2].low;
+      let ob = null;
+      for (let j = i - 1; j >= Math.max(0, i - 5); j--) {
+        if (candles[j].close < candles[j].open) { ob = candles[j]; break; }
+      }
+      if (ob) {
+        const overlapLow = Math.max(fvgLow, ob.low);
+        const overlapHigh = Math.min(fvgHigh, ob.high);
+        if (overlapLow <= overlapHigh && last.low <= overlapHigh + tolerance && last.high >= overlapLow - tolerance && last.close >= overlapLow) {
+          return { name: "Order Block + FVG overlap (bullish)", direction: "BUY", entry: (overlapLow + overlapHigh) / 2, priority: 2 };
+        }
       }
     }
 
-    // CyberFX publishes CONFIRMED A+ setups only.
-    // REJECTION and VALID SETUP may be detected internally,
-    // but they must never be published as trade signals.
-    const confirmed = candidates.filter(
-      signal => signal.status === "CONFIRMED"
-    );
+    // Bearish FVG: candle i low is above candle i+2 high.
+    if (candles[i].low > candles[i + 2].high) {
+      const fvgLow = candles[i + 2].high;
+      const fvgHigh = candles[i].low;
+      let ob = null;
+      for (let j = i - 1; j >= Math.max(0, i - 5); j--) {
+        if (candles[j].close > candles[j].open) { ob = candles[j]; break; }
+      }
+      if (ob) {
+        const overlapLow = Math.max(fvgLow, ob.low);
+        const overlapHigh = Math.min(fvgHigh, ob.high);
+        if (overlapLow <= overlapHigh && last.high >= overlapLow - tolerance && last.low <= overlapHigh + tolerance && last.close <= overlapHigh) {
+          return { name: "Order Block + FVG overlap (bearish)", direction: "SELL", entry: (overlapLow + overlapHigh) / 2, priority: 2 };
+        }
+      }
+    }
+  }
+  return null;
+}
 
-    if (!confirmed.length) continue;
+function detectThirdTouchTrendline(candles, htfLevel, atr) {
+  const n = candles.length;
+  if (n < 25) return null;
+  const swings = findSwingPoints(candles, 2, 2, 60);
+  const last = candles[n - 1];
+  const tolerance = Math.max(atr * 0.35, Math.abs(last.close) * 0.0001);
 
-    confirmed.sort((a, b) =>
-      tfPriority(b.entryTFRaw) - tfPriority(a.entryTFRaw)
-    );
-
-    results.push(confirmed[0]);
+  // Approximate three-touch rising support using swing lows.
+  const lows = swings.lows.slice(-12);
+  for (let a = 0; a < lows.length - 2; a++) {
+    for (let b = a + 1; b < lows.length - 1; b++) {
+      const first = lows[a], second = lows[b];
+      if (second.price <= first.price || second.index <= first.index) continue;
+      const slope = (second.price - first.price) / (second.index - first.index);
+      const third = lows.slice(b + 1).find(point => {
+        const projected = first.price + slope * (point.index - first.index);
+        return Math.abs(point.price - projected) <= tolerance && Math.abs(point.price - htfLevel.price) <= tolerance * 2;
+      });
+      if (third && Math.abs(last.low - htfLevel.price) <= tolerance * 2 && last.close > last.open) {
+        return { name: "Third-touch trendline + MSNR alignment (bullish)", direction: "BUY", entry: htfLevel.price, priority: 1 };
+      }
+    }
   }
 
-  diagnostics.resultsFound = results.length;
-  diagnostics.completedAt = new Date().toISOString();
-  diagnostics.reason = results.length
-    ? "Active setups found"
-    : "No active setup passed the configured A+ / rejection filters";
+  // Approximate three-touch falling resistance using swing highs.
+  const highs = swings.highs.slice(-12);
+  for (let a = 0; a < highs.length - 2; a++) {
+    for (let b = a + 1; b < highs.length - 1; b++) {
+      const first = highs[a], second = highs[b];
+      if (second.price >= first.price || second.index <= first.index) continue;
+      const slope = (second.price - first.price) / (second.index - first.index);
+      const third = highs.slice(b + 1).find(point => {
+        const projected = first.price + slope * (point.index - first.index);
+        return Math.abs(point.price - projected) <= tolerance && Math.abs(point.price - htfLevel.price) <= tolerance * 2;
+      });
+      if (third && Math.abs(last.high - htfLevel.price) <= tolerance * 2 && last.close < last.open) {
+        return { name: "Third-touch trendline + MSNR alignment (bearish)", direction: "SELL", entry: htfLevel.price, priority: 1 };
+      }
+    }
+  }
+  return null;
+}
 
-  return {
-    signals: results,
-    diagnostics
-  };
+function findSwingTarget(candles, direction, entry, htfLevels = []) {
+  const swings = findSwingPoints(candles, 2, 2, 100);
+  if (direction === "BUY") {
+    const targets = [
+      ...swings.highs.map(s => s.price),
+      ...htfLevels.map(level => level.price)
+    ].filter(p => Number.isFinite(p) && p > entry).sort((a, b) => a - b);
+    if (targets.length) return targets[0];
+    const high = Math.max(...candles.slice(-60).map(c => c.high));
+    return high > entry ? high : null;
+  }
+  const targets = [
+    ...swings.lows.map(s => s.price),
+    ...htfLevels.map(level => level.price)
+  ].filter(p => Number.isFinite(p) && p < entry).sort((a, b) => b - a);
+  if (targets.length) return targets[0];
+  const low = Math.min(...candles.slice(-60).map(c => c.low));
+  return low < entry ? low : null;
+}
+
+function getAsianRangeLevels(market, now = new Date()) {
+  // Prefer M5 data, but fall back to M15 if the M5 feed failed.
+  const data = [market["5min"], market["15min"]].find(
+    candidate => candidate && candidate.status === "success" && Array.isArray(candidate.candles)
+  );
+  if (!data) return [];
+  const candles = normalizeCandles(data.candles).filter(c => !c.isOpen);
+  const p = nyTimeParts(now);
+  const previousDate = new Date(Date.UTC(p.year, p.month - 1, p.day - 1));
+  const previousKey = `${previousDate.getUTCFullYear()}-${String(previousDate.getUTCMonth() + 1).padStart(2, "0")}-${String(previousDate.getUTCDate()).padStart(2, "0")}`;
+  const asianCandles = candles.filter(c => {
+    if (!c.time) return false;
+    const local = nyTimeParts(new Date(c.time));
+    const key = `${local.year}-${String(local.month).padStart(2, "0")}-${String(local.day).padStart(2, "0")}`;
+    return key === previousKey && local.hour >= 20;
+  });
+  if (!asianCandles.length) return [];
+  return [
+    { price: Math.max(...asianCandles.map(c => c.high)), type: "Asian High", timeframe: "Asian Range" },
+    { price: Math.min(...asianCandles.map(c => c.low)), type: "Asian Low", timeframe: "Asian Range" }
+  ];
+}
+
+function nyTimeParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(date);
+  const out = {};
+  for (const part of parts) if (part.type !== "literal") out[part.type] = part.value;
+  return { year: Number(out.year), month: Number(out.month), day: Number(out.day), hour: Number(out.hour), minute: Number(out.minute), second: Number(out.second) };
+}
+
+function newYorkZoneAbbr(date = new Date()) {
+  const label = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", timeZoneName: "short" }).format(date);
+  return label.includes("EDT") ? "EDT" : "EST";
+}
+
+function isAlchemistTradingWindow(date = new Date()) {
+  const p = nyTimeParts(date);
+  const minuteOfDay = p.hour * 60 + p.minute;
+  // London Killzone: 02:00–05:00 NY time.
+  // New York AM Killzone: 08:30–11:00 NY time.
+  return (minuteOfDay >= 120 && minuteOfDay < 300) || (minuteOfDay >= 510 && minuteOfDay < 660);
+}
+
+function formatWatTime(nyMinuteOfDay, date = new Date()) {
+  const offsetHours = newYorkZoneAbbr(date) === "EDT" ? 5 : 6;
+  const total = (nyMinuteOfDay + offsetHours * 60) % (24 * 60);
+  const hour24 = Math.floor(total / 60);
+  const minute = total % 60;
+  const suffix = hour24 >= 12 ? "PM" : "AM";
+  const hour12 = hour24 % 12 || 12;
+  return `${hour12}:${String(minute).padStart(2, "0")} ${suffix}`;
+}
+
+function formatNYTime(minuteOfDay) {
+  const hour24 = Math.floor(minuteOfDay / 60) % 24;
+  const minute = minuteOfDay % 60;
+  const suffix = hour24 >= 12 ? "PM" : "AM";
+  const hour12 = hour24 % 12 || 12;
+  return `${hour12}:${String(minute).padStart(2, "0")} ${suffix}`;
+}
+
+function getSessionAlert(now = new Date()) {
+  const p = nyTimeParts(now);
+  const minuteOfDay = p.hour * 60 + p.minute;
+  const dateKey = `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
+
+  if (minuteOfDay >= 120 && minuteOfDay < 140) {
+    return {
+      key: `${dateKey}:london`,
+      name: "London",
+      flag: "🇬🇧",
+      start: 120,
+      end: 300,
+      text: `🔔 CYBERFX SESSION ALERT
+
+🇬🇧 LONDON SESSION IS OPENING!
+
+Traders, get ready! The London trading session is beginning.
+
+⏰ Session Time: 2:00 AM – 5:00 AM (New York Time)
+🇳🇬 Nigeria Time: ${formatWatTime(120, now)} – ${formatWatTime(300, now)} (WAT)
+
+📊 Trading Pairs: XAUUSD & BTCUSD
+
+⚠️ The session opening does not guarantee an immediate signal. CyberFX will wait for valid entry conditions before generating a signal.
+
+🎯 Traders, stay ready! Keep an eye on the market and wait for confirmed signals before entering any trade.
+
+Stay alert. Trade smart.
+
+God Over Man`
+    };
+  }
+
+  if (minuteOfDay >= 510 && minuteOfDay < 530) {
+    return {
+      key: `${dateKey}:newyork`,
+      name: "New York",
+      flag: "🇺🇸",
+      start: 510,
+      end: 660,
+      text: `🔔 CYBERFX SESSION ALERT
+
+🇺🇸 NEW YORK SESSION IS OPENING!
+
+Traders, get ready! The New York AM trading session is beginning.
+
+⏰ Session Time: 8:30 AM – 11:00 AM (New York Time)
+🇳🇬 Nigeria Time: ${formatWatTime(510, now)} – ${formatWatTime(660, now)} (WAT)
+
+📊 Trading Pairs: XAUUSD & BTCUSD
+
+⚠️ The session opening does not guarantee an immediate signal. CyberFX will wait for valid entry conditions before generating a signal.
+
+🎯 Traders, stay ready! Keep an eye on the market and wait for confirmed signals before entering any trade.
+
+Stay alert. Trade smart.
+
+God Over Man`
+    };
+  }
+  return null;
+}
+
+function getTradingSession(time) {
+  const p = nyTimeParts(new Date(time));
+  const minuteOfDay = p.hour * 60 + p.minute;
+  if (minuteOfDay >= 120 && minuteOfDay < 300) return { name: "London Killzone" };
+  if (minuteOfDay >= 510 && minuteOfDay < 660) return { name: "New York AM Killzone" };
+  if (minuteOfDay >= 1200 || minuteOfDay < 0) return { name: "Asian Range — No Trading" };
+  return { name: "Outside Alchemist Trading Window" };
 }
 
 // ============================================================
@@ -1198,8 +1577,8 @@ function analyzeInstrument(
 
     label:
       structureBreak.direction === "bullish"
-        ? "CYBERFX A+ BUY"
-        : "CYBERFX A+ SELL",
+        ? "🟢 CYBERFX A+ BUY"
+        : "🟢 CYBERFX A+ SELL",
 
     session:
 
@@ -1370,60 +1749,6 @@ function detectRejection(
   }
 
   return null;
-}
-
-
-// ============================================================
-// REJECTION SIGNAL OUTPUT
-// ============================================================
-
-function buildRejectionSignal(
-  item,
-  entryTF,
-  rejection,
-  htfBias,
-  current
-) {
-  if (!item || !rejection || !current) return null;
-
-  const direction =
-    rejection.direction === "bullish" ? "BUY" : "SELL";
-  const level = Number(rejection.level);
-  const price = Number(current.close);
-
-  if (!Number.isFinite(level) || !Number.isFinite(price)) {
-    return null;
-  }
-
-  return {
-    instrument: item.name || item.symbol,
-    symbol: item.symbol,
-    category: item.category,
-    direction,
-    orderType: direction === "BUY" ? "BUY REJECTION" : "SELL REJECTION",
-    entryTF: formatTF(entryTF),
-    entryTFRaw: entryTF,
-    rejectionLevel: roundPrice(level),
-    price: roundPrice(price),
-    status: "REJECTION",
-    label: direction === "BUY"
-      ? " CYBERFX BUY REJECTION"
-      : " CYBERFX SELL REJECTION",
-    session: getTradingSession(current.time).name,
-    signalTime: current.time,
-    message: rejection.reason || (
-      direction === "BUY"
-        ? "Price rejected the level and closed back above it."
-        : "Price rejected the level and closed back below it."
-    ),
-    internal: {
-      htfBias,
-      rejectionType: rejection.type,
-      rejectionReason: rejection.reason,
-      rejectionLevel: level,
-      signalCandleTime: current.time
-    }
-  };
 }
 
 
@@ -1679,8 +2004,8 @@ function buildValidSetupSignal(
 
     label:
       direction === "bullish"
-        ? " CYBERFX VALID BUY SETUP"
-        : " CYBERFX VALID SELL SETUP",
+        ? "🟡 CYBERFX VALID BUY SETUP"
+        : "🟡 CYBERFX VALID SELL SETUP",
 
     components,
 
@@ -2821,62 +3146,6 @@ function normalizeCandles(
 
 
 // ============================================================
-// TRADING SESSIONS
-// UTC
-// ============================================================
-
-function getTradingSession(
-  time
-) {
-  const date =
-    new Date(time);
-
-  const hour =
-    date.getUTCHours();
-
-  if (
-    hour >= 21 ||
-    hour < 6
-  ) {
-    return {
-      name: "Sydney"
-    };
-  }
-
-  if (
-    hour >= 0 &&
-    hour < 9
-  ) {
-    return {
-      name: "Asia"
-    };
-  }
-
-  if (
-    hour >= 7 &&
-    hour < 16
-  ) {
-    return {
-      name: "London"
-    };
-  }
-
-  if (
-    hour >= 12 &&
-    hour < 21
-  ) {
-    return {
-      name: "New York"
-    };
-  }
-
-  return {
-    name: "Global"
-  };
-}
-
-
-// ============================================================
 // TRIAL SYSTEM
 // ============================================================
 
@@ -3547,19 +3816,11 @@ async function handleTelegramMessage(
     if (access.owner) {
       await sendTelegramMessage(
         chatId,
-        `CYBERFX OWNER
+        `👑 CYBERFX OWNER
 
 Owner access is active.
 
-Automatic scanning is enabled.
-
-Approved markets:
-Gold
-BTC
-US Tech
-US Oil
-
-Synthetics: COMING SOON
+📡 Automatic scanning is enabled.
 
 Use /signals for a manual scan.`,
         env.TELEGRAM_BOT_TOKEN
@@ -3571,19 +3832,11 @@ Use /signals for a manual scan.`,
     if (access.authorized) {
       await sendTelegramMessage(
         chatId,
-        `CYBERFX
+        `🔥 CYBERFX
 
 Your access is active.
 
-Automatic signals are enabled.
-
-Approved markets:
-Gold
-BTC
-US Tech
-US Oil
-
-Synthetics: COMING SOON
+📡 Automatic signals are enabled.
 
 Use /signals for the current scan.`,
         env.TELEGRAM_BOT_TOKEN
@@ -3594,7 +3847,7 @@ Use /signals for the current scan.`,
 
     await sendTelegramMessage(
       chatId,
-      ` CYBERFX
+      `🔒 CYBERFX
 
 Access denied.
 
@@ -3616,7 +3869,7 @@ ${WEBSITE_URL}`,
   if (text === "/subscribe") {
     await sendTelegramMessage(
       chatId,
-      ` CYBERFX
+      `🔥 CYBERFX
 
 Register and subscribe here:
 
@@ -3648,7 +3901,7 @@ After the trial expires, access automatically stops unless a paid subscription i
     if (!access.authorized) {
       await sendTelegramMessage(
         chatId,
-        ` CYBERFX
+        `🔒 CYBERFX
 
 Your access is inactive.
 
@@ -3662,31 +3915,22 @@ ${WEBSITE_URL}`,
     }
 
     try {
-      const scan =
+      const signals =
         await generateSignals();
-
-      const signals = scan.signals;
 
       const active =
         signals.filter(
           signal =>
-            signal.status ===
-            "CONFIRMED"
+            signal.status !==
+            "NO SIGNAL"
         );
 
       if (!active.length) {
         await sendTelegramMessage(
           chatId,
-          `CYBERFX
+          `CYBERFX ALCHEMIST
 
-No active trade at the moment.
-No confirmed A+ setup at the moment.
-
-Scanner status: ${scan.diagnostics.instrumentsAnalyzed} instruments analyzed.
-Market data: ${scan.diagnostics.marketSuccess}/${scan.diagnostics.marketRequests} requests successful.
-Biquote: ${scan.diagnostics.biquote.connected ? "CONNECTED" : "NOT CONNECTED"}.
-
-We will continue waiting for a valid setup.`,
+No confirmed Alchemist setup is available right now. Signals are generated only during the London Killzone (2:00–5:00 AM New York time) and New York AM Killzone (8:30–11:00 AM New York time).`,
           env.TELEGRAM_BOT_TOKEN
         );
 
@@ -3730,7 +3974,7 @@ Signal engine temporarily unavailable.`,
   if (text === "/help") {
     await sendTelegramMessage(
       chatId,
-      ` CYBERFX
+      `🔥 CYBERFX
 
 Commands:
 
@@ -3739,7 +3983,7 @@ Commands:
 /subscribe — Subscription/trial
 /help — Show commands
 
- Active users receive new signals automatically.`,
+📡 Active users receive new signals automatically.`,
       env.TELEGRAM_BOT_TOKEN
     );
   }
@@ -3750,96 +3994,89 @@ Commands:
 // AUTOMATIC SCAN
 // ============================================================
 
-async function runAutomaticScan(
-  env
-) {
+async function runAutomaticScan(env) {
   if (!env.TELEGRAM_BOT_TOKEN) {
-    console.error(
-      "TELEGRAM_BOT_TOKEN is missing"
-    );
-
+    console.error("TELEGRAM_BOT_TOKEN is missing");
     return;
   }
 
   try {
-    const scan =
-      await generateSignals();
+    const recipients = await getAuthorizedTelegramIds(env);
+    await sendSessionOpeningAlerts(env, recipients);
 
-    const signals = scan.signals;
-
-    const active =
-      signals.filter(
-        signal =>
-          signal.status ===
-          "CONFIRMED"
-      );
-
-    if (!active.length) {
-      console.log(
-        "CYBERFX: No active signals."
-      );
-
+    if (!isAlchemistTradingWindow(new Date())) {
+      console.log("CYBERFX: Outside the Alchemist London/New York killzones; no entries will be generated.");
       return;
     }
 
-    const recipients =
-      await getAuthorizedTelegramIds(
-        env
-      );
-
-    for (
-      const signal of active
-    ) {
-      const signature =
-        createSignalSignature(
-          signal
-        );
-
-      if (
-        await wasSignalSent(
-          signature,
-          env
-        )
-      ) {
-        continue;
-      }
-
-      let delivered = false;
-
-      for (
-        const chatId of recipients
-      ) {
-        const result =
-          await sendTelegramMessage(
-            chatId,
-            formatTelegramSignal(
-              signal
-            ),
-            env.TELEGRAM_BOT_TOKEN
-          );
-
-        if (result?.ok) {
-          delivered = true;
-        }
-      }
-
-      if (delivered) {
-        await markSignalSent(
-          signature,
-          signal,
-          env
-        );
-      }
+    const signals = await generateSignals();
+    const active = signals.filter(signal => signal.status === "CONFIRMED");
+    if (!active.length) {
+      console.log("CYBERFX Alchemist: no confirmed setups in this scan.");
+      return;
     }
 
+    for (const signal of active) {
+      const signature = createSignalSignature(signal);
+      if (await wasSignalSent(signature, env)) continue;
+
+      let delivered = false;
+      for (const chatId of recipients) {
+        const result = await sendTelegramMessage(chatId, formatTelegramSignal(signal), env.TELEGRAM_BOT_TOKEN);
+        if (result?.ok) delivered = true;
+      }
+      if (delivered) await markSignalSent(signature, signal, env);
+    }
   } catch (error) {
-    console.error(
-      "Automatic scan error:",
-      error
-    );
+    console.error("Automatic scan error:", error);
   }
 }
 
+async function sendSessionOpeningAlerts(env, recipients) {
+  const alert = getSessionAlert(new Date());
+  if (!alert) return;
+
+  // Use D1 to prevent duplicate alerts during repeated cron executions.
+  if (!env.DB) {
+    console.error("Session alert skipped: D1 is required for duplicate prevention.");
+    return;
+  }
+
+  try {
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS session_alerts (
+        alert_key TEXT PRIMARY KEY,
+        session_name TEXT NOT NULL,
+        sent_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `).run();
+
+    const alreadySent = await env.DB.prepare(
+      "SELECT alert_key FROM session_alerts WHERE alert_key = ? LIMIT 1"
+    ).bind(alert.key).first();
+    if (alreadySent) return;
+
+    let delivered = false;
+    for (const chatId of recipients) {
+      const result = await sendTelegramMessage(chatId, alert.text, env.TELEGRAM_BOT_TOKEN);
+      if (result?.ok) delivered = true;
+    }
+
+    if (delivered) {
+      await env.DB.prepare(
+        "INSERT OR IGNORE INTO session_alerts (alert_key, session_name) VALUES (?, ?)"
+      ).bind(alert.key, alert.name).run();
+      await env.DB.prepare(`
+        DELETE FROM session_alerts
+        WHERE alert_key NOT IN (
+          SELECT alert_key FROM session_alerts ORDER BY sent_at DESC LIMIT 120
+        )
+      `).run();
+    }
+  } catch (error) {
+    console.error("Session notification error:", error);
+  }
+}
 
 // ============================================================
 // SIGNAL SIGNATURE
@@ -3993,72 +4230,24 @@ async function markSignalSent(
 // ============================================================
 
 function formatTelegramSignal(signal) {
-  if (signal.status === "REJECTION") {
-    return `CYBERFX ${signal.direction} REJECTION
-
-${signal.instrument}
-
-Entry TF: ${signal.entryTF}
-
-Rejection Level: ${signal.rejectionLevel}
-
-Current Price: ${signal.price}
-
-${signal.message}
-
-DEVELOPING OPPORTUNITY`;
-  }
-
-  if (signal.status === "VALID SETUP") {
-    return `CYBERFX VALID SETUP
+  const icon = signal.direction === "BUY" ? "🟢" : "🔴";
+  return `${icon} CYBERFX ALCHEMIST SIGNAL
 
 ${signal.instrument} — ${signal.direction}
 
-Order: ${signal.orderType}
+🎯 Setup: ${signal.setupType || "Alchemist entry"}
+⏱️ Entry Timeframe: ${signal.entryTF}
+📍 Entry: ${signal.entry}
+🛑 Stop Loss: ${signal.stopLoss}
+💎 Target: ${signal.takeProfit}
+📐 Risk/Reward to swing target: ${signal.riskReward || "Swing target"}
+🕒 Session: ${signal.session}
 
-Entry TF: ${signal.entryTF}
+📌 Trade Management Note: ${signal.managementNote || "Consider Break-Even only when price and market structure justify protecting capital."}
 
-Entry: ${signal.entry}
+⚠️ Wait for valid entry conditions and manage risk responsibly.
 
-Stop Loss: ${signal.stopLoss}
-
-Take Profit: ${signal.takeProfit}
-
-Risk/Reward: 1:10
-
-Session: ${signal.session}
-
-Setup:
-${signal.components?.length ? signal.components.map(x => `- ${x}`).join("\n") : "- Developing structure"}
-
-VALID SETUP — AWAITING FULL CONFIRMATION`;
-  }
-
-  if (signal.status === "CONFIRMED") {
-    return `CYBERFX A+ CONFIRMED
-
-${signal.instrument} — ${signal.direction}
-
-Order: ${signal.orderType}
-
-Entry TF: ${signal.entryTF}
-
-Entry: ${signal.entry}
-
-Stop Loss: ${signal.stopLoss}
-
-Take Profit: ${signal.takeProfit}
-
-Risk/Reward: 1:10
-
-Session: ${signal.session}
-
-A+ CONFIRMED
-
-GOD OVER MAN`;
-  }
-
-  return `CYBERFX\n\nNo confirmed A+ setup available.`;
+God Over Man`;
 }
 
 // ============================================================
@@ -4160,11 +4349,13 @@ function roundPrice(price) {
 
 function formatTF(tf) {
   const names = {
-    "15min": "15M",
-    "30min": "30M",
-    "1h": "1H",
-    "4h": "4H",
-    "1d": "1D"
+    "1min": "M1 (1 Minute)",
+    "5min": "M5 (5 Minutes)",
+    "15min": "M15 (15 Minutes)",
+    "30min": "M30 (30 Minutes)",
+    "1h": "H1",
+    "4h": "H4",
+    "1d": "D1"
   };
 
   return names[tf] || tf;
@@ -4173,10 +4364,10 @@ function formatTF(tf) {
 
 function tfPriority(tf) {
   const priority = {
-    "4h": 4,
-    "1h": 3,
-    "30min": 2,
-    "15min": 1
+    "1min": 1,
+    "5min": 2,
+    "15min": 3,
+    "30min": 4
   };
 
   return priority[tf] || 0;
