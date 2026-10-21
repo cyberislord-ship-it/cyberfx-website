@@ -11,7 +11,7 @@ export default {
       return json({
         success: true,
         engine: "CyberFX",
-        version: "3.1.0-bybit-alchemist",
+        version: "3.2.0-bybit-alchemist-news",
         status: "online",
         market_data: "Bybit Public API",
         bybit_connected: bybitConnected,
@@ -24,6 +24,30 @@ export default {
         risk_reward: "swing-target-based",
         trial_days: 21
       });
+    }
+
+    // =========================================================
+    // ECONOMIC NEWS DASHBOARD
+    // =========================================================
+    if (url.pathname === "/api/news/today" && request.method === "GET") {
+      try {
+        const events = await fetchCyberFXEconomicCalendar();
+        const todayWAT = getDateInTimeZone(new Date(), "Africa/Lagos");
+        const today = events.filter(event => {
+          const at = getEconomicEventTime(event);
+          return at && getDateInTimeZone(at, "Africa/Lagos") === todayWAT;
+        });
+        return json({
+          success: true,
+          source: "Finance Calendar",
+          source_url: "https://www.financecalendar.com",
+          timezone: "Africa/Lagos",
+          date: todayWAT,
+          events: today.map(formatEconomicEventForApi)
+        });
+      } catch (error) {
+        return json({ success: false, error: "Economic calendar temporarily unavailable. Please retry shortly." }, 502);
+      }
     }
 
     // =========================================================
@@ -463,6 +487,9 @@ export default {
             env,
             url.origin
           );
+        }
+        if (update.callback_query) {
+          await handleTelegramCallback(update.callback_query, env);
         }
 
         return json({
@@ -3807,6 +3834,7 @@ async function handleTelegramMessage(
   // ========================================================
 
   if (text === "/start") {
+    await registerCyberFXTelegramCommands(env.TELEGRAM_BOT_TOKEN);
     const access =
       await isTelegramAuthorized(
         telegramId,
@@ -3859,6 +3887,34 @@ ${WEBSITE_URL}`,
       env.TELEGRAM_BOT_TOKEN
     );
 
+    return;
+  }
+
+  // ========================================================
+  // NEWS CENTER — permanent command, available to all users
+  // ========================================================
+  if (text === "/news" || text.startsWith("/news@")) {
+    await sendTelegramMessageWithMarkup(
+      chatId,
+      `🌍 WELCOME TO THE CYBERFX NEWS CENTER!
+
+Stay informed. Stay prepared. Stay ahead of the market.
+
+Choose what you want to view below. You can return here any time with /news, including to catch up on available updates after joining.
+
+🥇 XAUUSD | ₿ BTCUSD
+
+God Over Man`,
+      { inline_keyboard: [
+        [{ text: "📅 Economic Calendar", callback_data: "news_calendar" }],
+        [{ text: "🇺🇸 Forex News", callback_data: "news_forex" }, { text: "₿ Crypto News", callback_data: "news_crypto" }],
+        [{ text: "🚨 High-Impact News", callback_data: "news_high" }],
+        [{ text: "📊 News Results", callback_data: "news_results" }],
+        [{ text: "🗂️ Recent News / Archive", callback_data: "news_archive" }],
+        [{ text: "🔄 Refresh News", callback_data: "news_calendar" }]
+      ]},
+      env.TELEGRAM_BOT_TOKEN
+    );
     return;
   }
 
@@ -3991,6 +4047,140 @@ Commands:
 
 
 // ============================================================
+// NEWS CENTER CALLBACKS + RECENT NEWS ARCHIVE
+// ============================================================
+async function handleTelegramCallback(query, env) {
+  const chatId = query.message?.chat?.id;
+  const data = String(query.data || "");
+  if (!chatId) return;
+  await answerTelegramCallback(query.id, env.TELEGRAM_BOT_TOKEN);
+
+  if (data === "news_home") {
+    await sendTelegramMessageWithMarkup(chatId,
+      `🌍 CYBERFX NEWS CENTER\n\nChoose a category to view the latest available information and recent stored updates.\n\nGod Over Man`,
+      { inline_keyboard: [
+        [{ text: "📅 Economic Calendar", callback_data: "news_calendar" }],
+        [{ text: "🇺🇸 Forex News", callback_data: "news_forex" }, { text: "₿ Crypto News", callback_data: "news_crypto" }],
+        [{ text: "🚨 High-Impact News", callback_data: "news_high" }],
+        [{ text: "📊 News Results", callback_data: "news_results" }],
+        [{ text: "🗂️ Recent News / Archive", callback_data: "news_archive" }]
+      ]}, env.TELEGRAM_BOT_TOKEN);
+    return;
+  }
+
+  if (["news_calendar", "news_forex", "news_high", "news_results", "news_archive"].includes(data)) {
+    try {
+      const events = await fetchCyberFXEconomicCalendar();
+      await storeNewsArchive(env, events);
+      const now = Date.now();
+      let chosen = events;
+      let heading = "📅 CYBERFX ECONOMIC CALENDAR";
+      if (data === "news_forex") {
+        heading = "🇺🇸 CYBERFX FOREX NEWS / ECONOMIC DRIVERS";
+        chosen = events;
+      } else if (data === "news_high") {
+        heading = "🚨 HIGH-IMPACT NEWS";
+        chosen = events.filter(e => String(e.impact || "high").toLowerCase().includes("high"));
+      } else if (data === "news_results") {
+        heading = "📊 RELEASED NEWS RESULTS";
+        chosen = events.filter(e => (e.actual !== null && e.actual !== undefined && e.actual !== "") || String(e.status || "").toLowerCase().includes("release"));
+      } else if (data === "news_archive") {
+        heading = "🗂️ RECENT NEWS ARCHIVE";
+        chosen = await readNewsArchive(env);
+      }
+      const items = chosen.filter(e => {
+        if (data === "news_archive" || data === "news_results") return true;
+        const at = getEconomicEventTime(e);
+        return !at || at.getTime() >= now - 24 * 60 * 60 * 1000;
+      }).slice(0, 10);
+      let body = `${heading}\n\n`;
+      if (!items.length) {
+        body += data === "news_results"
+          ? "No released figures are available in the current calendar response yet. Check again after the release.\n"
+          : data === "news_archive"
+            ? "No saved news updates are available yet. The archive will populate as the bot retrieves calendar updates.\n"
+            : "No matching events were returned by the calendar provider. Please refresh later.\n";
+      } else {
+        body += items.map((e, i) => {
+          const name = e.series_name || e.title || e.name || "US economic release";
+          const at = getEconomicEventTime(e);
+          const time = at ? new Intl.DateTimeFormat("en-NG", { timeZone: "Africa/Lagos", dateStyle: "medium", timeStyle: "short", hour12: true }).format(at) + " WAT" : (e.time_local || "Time not confirmed");
+          return `${i + 1}. ${name}\n🕒 ${time}\nImpact: ${e.impact || "Not provided"}\nPrevious: ${formatNewsNumber(e.prior ?? e.previous)} | Forecast: ${formatNewsNumber(e.consensus ?? e.forecast)} | Actual: ${formatNewsNumber(e.actual)}${e.url ? `\nSource: ${e.url}` : ""}`;
+        }).join("\n\n");
+      }
+      body += `\n\nCalendar source: ${CYBERFX_NEWS_SOURCE}\n\nFigures may be revised by the provider. Verify high-impact data against the official release.\n\nGod Over Man`;
+      await sendTelegramMessageWithMarkup(chatId, body, { inline_keyboard: [[{ text: "🔙 News Center", callback_data: "news_home" }], [{ text: "🔄 Refresh", callback_data: data }]] }, env.TELEGRAM_BOT_TOKEN);
+    } catch (error) {
+      console.error("News Center callback error:", error?.message || error);
+      await sendTelegramMessageWithMarkup(chatId,
+        `⚠️ The News Center could not retrieve fresh calendar data right now. Please try again shortly.\n\nGod Over Man`,
+        { inline_keyboard: [[{ text: "🔙 News Center", callback_data: "news_home" }, { text: "🔄 Retry", callback_data: data }]] }, env.TELEGRAM_BOT_TOKEN);
+    }
+    return;
+  }
+
+  if (data === "news_crypto") {
+    await sendTelegramMessageWithMarkup(chatId,
+      `₿ CYBERFX CRYPTO NEWS\n\nLive crypto headlines are not configured with a verified news-feed provider in this Worker yet, so this section will not invent headlines. You can check current Bitcoin market coverage here:\nhttps://www.coindesk.com/\nhttps://cointelegraph.com/\n\nWhen a verified feed is configured, this button can display headlines and timestamps directly in Telegram.\n\nGod Over Man`,
+      { inline_keyboard: [[{ text: "🔙 News Center", callback_data: "news_home" }]] }, env.TELEGRAM_BOT_TOKEN);
+  }
+}
+
+async function storeNewsArchive(env, events) {
+  if (!env.DB || !Array.isArray(events)) return;
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS news_archive (
+    event_key TEXT PRIMARY KEY,
+    event_json TEXT NOT NULL,
+    captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  )`).run();
+  for (const event of events.slice(0, 100)) {
+    const key = String(event.id || event.series_code || event.title || event.name || getEconomicEventTime(event)?.toISOString() || "").slice(0, 250);
+    if (!key) continue;
+    await env.DB.prepare(`INSERT INTO news_archive (event_key, event_json, captured_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(event_key) DO UPDATE SET event_json = excluded.event_json, captured_at = CURRENT_TIMESTAMP`)
+      .bind(key, JSON.stringify(event)).run();
+  }
+}
+
+async function readNewsArchive(env) {
+  if (!env.DB) return [];
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS news_archive (
+    event_key TEXT PRIMARY KEY,
+    event_json TEXT NOT NULL,
+    captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  )`).run();
+  const result = await env.DB.prepare(`SELECT event_json FROM news_archive ORDER BY captured_at DESC LIMIT 10`).all();
+  return (result.results || []).flatMap(row => { try { return [JSON.parse(row.event_json)]; } catch { return []; } });
+}
+
+async function registerCyberFXTelegramCommands(token) {
+  if (!token) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${token}/setMyCommands`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ commands: [
+        { command: "start", description: "Open CyberFX and check access" },
+        { command: "help", description: "View available commands" },
+        { command: "signals", description: "Run a manual signal scan" },
+        { command: "news", description: "Open the CyberFX News Center" },
+        { command: "subscribe", description: "Register or manage trial access" }
+      ] })
+    });
+  } catch (error) {
+    console.error("Unable to register Telegram commands:", error?.message || error);
+  }
+}
+
+async function answerTelegramCallback(callbackId, token) {
+  if (!token || !callbackId) return;
+  try { await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ callback_query_id: callbackId })
+  }); } catch (error) { console.error("Telegram callback acknowledgement failed", error?.message || error); }
+}
+
+// ============================================================
 // AUTOMATIC SCAN
 // ============================================================
 
@@ -4003,6 +4193,7 @@ async function runAutomaticScan(env) {
   try {
     const recipients = await getAuthorizedTelegramIds(env);
     await sendSessionOpeningAlerts(env, recipients);
+    await runEconomicNewsAlerts(env, recipients);
 
     if (!isAlchemistTradingWindow(new Date())) {
       console.log("CYBERFX: Outside the Alchemist London/New York killzones; no entries will be generated.");
@@ -4075,6 +4266,204 @@ async function sendSessionOpeningAlerts(env, recipients) {
     }
   } catch (error) {
     console.error("Session notification error:", error);
+  }
+}
+
+
+// ============================================================
+// ECONOMIC NEWS ALERTS (US HIGH-IMPACT EVENTS)
+// Source: Finance Calendar API; attribution included in messages.
+// ============================================================
+
+const CYBERFX_NEWS_SOURCE = "https://www.financecalendar.com";
+
+async function fetchCyberFXEconomicCalendar() {
+  const now = new Date();
+  const from = getDateInTimeZone(now, "UTC");
+  const end = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+  const to = getDateInTimeZone(end, "UTC");
+  const url = new URL("https://www.financecalendar.com/wp-json/fc/v1/calendar");
+  url.searchParams.set("country", "US");
+  url.searchParams.set("impact", "high");
+  url.searchParams.set("from", from);
+  url.searchParams.set("to", to);
+  url.searchParams.set("tz", "Africa/Lagos");
+  url.searchParams.set("limit", "100");
+
+  const response = await fetch(url.toString(), {
+    headers: { "accept": "application/json" },
+    signal: AbortSignal.timeout(10000)
+  });
+  if (!response.ok) throw new Error(`Economic calendar returned HTTP ${response.status}`);
+  const payload = await response.json();
+  if (!Array.isArray(payload.events)) throw new Error("Unexpected economic calendar response");
+  return payload.events;
+}
+
+function getEconomicEventTime(event) {
+  const value = event.release_at_utc || event.time_utc || event.time_local || event.date;
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function getDateInTimeZone(date, timeZone) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function formatEconomicEventForApi(event) {
+  return {
+    id: event.id || event.series_code || event.title || event.name,
+    name: event.series_name || event.title || event.name || "US economic release",
+    impact: event.impact || "high",
+    time_nigeria: event.time_local || null,
+    time_new_york: event.time_et || null,
+    release_at: event.release_at_utc || event.time_utc || null,
+    previous: event.prior ?? null,
+    forecast: event.consensus ?? null,
+    actual: event.actual ?? null,
+    status: event.status || "scheduled",
+    official_source: event.source_url || null,
+    calendar_source: event.url || CYBERFX_NEWS_SOURCE
+  };
+}
+
+function formatNewsNumber(value) {
+  return value === null || value === undefined || value === "" ? "Not available yet" : String(value);
+}
+
+function formatEconomicEventReport(event, mode) {
+  const name = event.series_name || event.title || event.name || "US economic release";
+  const at = getEconomicEventTime(event);
+  const nigeriaTime = at ? new Intl.DateTimeFormat("en-NG", {
+    timeZone: "Africa/Lagos", dateStyle: "medium", timeStyle: "short", hour12: true
+  }).format(at) : (event.time_local || "Time not confirmed");
+  const previous = event.prior ?? event.previous;
+  const forecast = event.consensus ?? event.forecast;
+  const actual = event.actual;
+  const header = mode === "pre" ? "🚨 CYBERFX HIGH-IMPACT NEWS WARNING" : "📊 CYBERFX ECONOMIC NEWS UPDATE";
+  let text = `${header}
+
+🇺🇸 ${name}
+🕒 Nigeria time: ${nigeriaTime}
+
+`;
+  text += `📌 Previous: ${formatNewsNumber(previous)}
+🔮 Forecast: ${formatNewsNumber(forecast)}
+`;
+  if (mode === "actual") {
+    text += `✅ Actual: ${formatNewsNumber(actual)}
+`;
+    if (actual !== null && actual !== undefined && actual !== "" && forecast !== null && forecast !== undefined && forecast !== "") {
+      text += `📉 Actual vs forecast: ${String(actual) === String(forecast) ? "In line by displayed value" : "Compare the actual figure with the forecast; units and revisions matter"}
+`;
+    }
+  } else {
+    text += `⏳ Actual: Not released yet
+`;
+  }
+  text += `
+🥇 XAUUSD (Gold)  |  ₿ BTCUSD (Bitcoin)
+`;
+  text += mode === "pre"
+    ? `⚠️ Volatility, spreads and slippage may rise around the release. Avoid blind entries and wait for confirmed Alchemist price action.\n`
+    : `⚠️ The data does not determine market direction by itself. Wait for price-action confirmation; do not assume a BUY or SELL outcome.\n`;
+  if (event.source_url) text += `
+Official source: ${event.source_url}
+`;
+  text += `Calendar data: ${CYBERFX_NEWS_SOURCE}
+
+God Over Man`;
+  return text;
+}
+
+async function runEconomicNewsAlerts(env, recipients) {
+  if (!env.DB || !recipients.length) {
+    if (!env.DB) console.error("Economic news alerts require D1 for duplicate prevention.");
+    return;
+  }
+  try {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS news_alerts (
+      alert_key TEXT PRIMARY KEY,
+      sent_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`).run();
+
+    const events = await fetchCyberFXEconomicCalendar();
+    await storeNewsArchive(env, events);
+    const now = new Date();
+    const todayWAT = getDateInTimeZone(now, "Africa/Lagos");
+    const todayEvents = events.filter(event => {
+      const at = getEconomicEventTime(event);
+      return at && getDateInTimeZone(at, "Africa/Lagos") === todayWAT;
+    });
+
+    // One complete daily briefing, including previous/forecast/actual values.
+    const dailyKey = `news-briefing:${todayWAT}`;
+    const dailySent = await env.DB.prepare("SELECT alert_key FROM news_alerts WHERE alert_key = ? LIMIT 1").bind(dailyKey).first();
+    if (!dailySent) {
+      let message = `🗓️ CYBERFX DAILY ECONOMIC NEWS BRIEFING
+
+🇺🇸 US high-impact events for ${todayWAT} (Nigeria time)
+
+`;
+      if (!todayEvents.length) {
+        message += `No high-impact US release is listed for today in the calendar currently. This is not a guarantee that markets will be quiet.\n\n`;
+      } else {
+        message += todayEvents.slice(0, 12).map((event, index) => {
+          const name = event.series_name || event.title || event.name || "US economic release";
+          const at = getEconomicEventTime(event);
+          const time = at ? new Intl.DateTimeFormat("en-NG", { timeZone: "Africa/Lagos", hour: "2-digit", minute: "2-digit", hour12: true }).format(at) : "Time TBC";
+          return `${index + 1}. ${name}
+🕒 ${time} WAT
+Previous: ${formatNewsNumber(event.prior)} | Forecast: ${formatNewsNumber(event.consensus)} | Actual: ${formatNewsNumber(event.actual)}`;
+        }).join("\n\n");
+        message += "\n\n";
+      }
+      message += `🥇 XAUUSD | ₿ BTCUSD\n⚠️ Expect possible volatility around releases. Wait for confirmation and manage risk.\n\nCalendar data: ${CYBERFX_NEWS_SOURCE}\n\nGod Over Man`;
+      let delivered = false;
+      for (const chatId of recipients) {
+        const result = await sendTelegramMessage(chatId, message, env.TELEGRAM_BOT_TOKEN);
+        if (result?.ok) delivered = true;
+      }
+      if (delivered) await env.DB.prepare("INSERT OR IGNORE INTO news_alerts (alert_key) VALUES (?)").bind(dailyKey).run();
+    }
+
+    for (const event of events) {
+      const at = getEconomicEventTime(event);
+      if (!at) continue;
+      const deltaMinutes = (at.getTime() - now.getTime()) / 60000;
+      const eventId = String(event.id || event.series_code || event.title || event.name || `${at.toISOString()}`);
+      let alertKey = null;
+      let message = null;
+
+      if (deltaMinutes >= 0 && deltaMinutes <= 30) {
+        alertKey = `news-pre:${eventId}`;
+        message = formatEconomicEventReport(event, "pre");
+      } else if ((event.status === "released" || (event.actual !== null && event.actual !== undefined && event.actual !== "")) && deltaMinutes < 0 && deltaMinutes >= -180) {
+        alertKey = `news-actual:${eventId}`;
+        message = formatEconomicEventReport(event, "actual");
+      }
+      if (!alertKey) continue;
+      const sent = await env.DB.prepare("SELECT alert_key FROM news_alerts WHERE alert_key = ? LIMIT 1").bind(alertKey).first();
+      if (sent) continue;
+      let delivered = false;
+      for (const chatId of recipients) {
+        const result = await sendTelegramMessage(chatId, message, env.TELEGRAM_BOT_TOKEN);
+        if (result?.ok) delivered = true;
+      }
+      if (delivered) await env.DB.prepare("INSERT OR IGNORE INTO news_alerts (alert_key) VALUES (?)").bind(alertKey).run();
+    }
+
+    await env.DB.prepare(`DELETE FROM news_alerts WHERE sent_at < datetime('now', '-45 days')`).run();
+  } catch (error) {
+    console.error("CyberFX economic news alert error:", error?.message || error);
   }
 }
 
@@ -4294,6 +4683,20 @@ async function sendTelegramMessage(
   }
 }
 
+
+async function sendTelegramMessageWithMarkup(chatId, text, replyMarkup, token) {
+  if (!token) return null;
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ chat_id: String(chatId), text, reply_markup: replyMarkup })
+    });
+    return await response.json();
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) };
+  }
+}
 
 // ============================================================
 // HELPERS
