@@ -11,17 +11,19 @@ export default {
       return json({
         success: true,
         engine: "CyberFX",
-        version: "3.2.0-bybit-alchemist-news",
+        version: "4.0.0-unified-xauusd",
         status: "online",
         market_data: "Bybit Public API",
         bybit_connected: bybitConnected,
         telegram_connected: !!env.TELEGRAM_BOT_TOKEN,
         paystack_connected: !!env.PAYSTACK_SECRET_KEY,
         database_connected: !!env.DB,
-        strategy: "Alchemist",
-        instruments: ["XAUUSD", "BTCUSD"],
+        strategy: "Unified signal engine",
+        instruments: ["XAUUSD"],
+        scan_interval_minutes: 15,
+        trading_sessions: ["Asian", "London", "New York"],
         session_timezone: "America/New_York",
-        risk_reward: "swing-target-based",
+        risk_reward: "1:8",
         trial_days: 21
       });
     }
@@ -410,8 +412,8 @@ export default {
           success: true,
           engine: "CyberFX",
           source: "Bybit Public API",
-          strategy: "Alchemist",
-          risk_reward: "swing-target-based",
+          strategy: "Unified signal engine",
+          risk_reward: "1:8",
           markets: symbols,
           timeframes: TIMEFRAMES.map(
             x => x.name
@@ -446,14 +448,10 @@ export default {
           success: true,
           engine: "CyberFX",
           source: "Bybit Public API",
-          strategy: "Alchemist",
-          instruments: ["XAUUSD", "BTCUSD"],
-          risk_reward: "swing-target-based",
-          signal_levels: [
-            "REJECTION",
-            "VALID SETUP",
-            "CONFIRMED"
-          ],
+          strategy: "Unified signal engine",
+          instruments: ["XAUUSD"],
+          risk_reward: "1:8",
+          signal_levels: ["CONFIRMED"],
           signals: result
         });
 
@@ -623,14 +621,9 @@ async function checkBybit() {
   // Public market-data endpoints require no API key.
   // Health is true only when both configured instruments return candles.
   try {
-    const checks = await Promise.all([
-      getCandles("XAUUSD", "1m"),
-      getCandles("BTCUSD", "1m")
-    ]);
-    return checks.every(item =>
-      item && item.status === "success" &&
-      Array.isArray(item.candles) && item.candles.length > 0
-    );
+    const gold = await getCandles("XAUUSD", "1m");
+    return !!(gold && gold.status === "success" &&
+      Array.isArray(gold.candles) && gold.candles.length > 0);
   } catch {
     return false;
   }
@@ -641,28 +634,16 @@ async function checkBybit() {
 // ============================================================
 
 async function discoverSymbols() {
-  // Public names used by CyberFX remain XAUUSD and BTCUSD.
-  // Bybit's actual public market symbols/categories are mapped separately.
-  return [
-    {
-      symbol: "XAUUSD",
-      name: "XAUUSD",
-      category: "COMMODITY",
-      description: "Gold versus US Dollar",
-      source: "Bybit Public API",
-      apiSymbol: "XAUUSDT",
-      apiCategory: "linear"
-    },
-    {
-      symbol: "BTCUSD",
-      name: "BTCUSD",
-      category: "CRYPTO",
-      description: "Bitcoin versus US Dollar",
-      source: "Bybit Public API",
-      apiSymbol: "BTCUSD",
-      apiCategory: "inverse"
-    }
-  ];
+  // The current CyberFX signal engine trades Gold only.
+  return [{
+    symbol: "XAUUSD",
+    name: "XAUUSD",
+    category: "COMMODITY",
+    description: "Gold versus US Dollar",
+    source: "Bybit Public API",
+    apiSymbol: "XAUUSDT",
+    apiCategory: "linear"
+  }];
 }
 
 // ============================================================
@@ -816,12 +797,9 @@ async function loadAllMarkets(symbols) {
 // ============================================================
 
 async function generateSignals() {
-  // Never generate Alchemist entries outside the two permitted killzones.
+  // Scan XAUUSD in every session. Each setup family is evaluated independently;
+  // overlapping detections are merged into one alert for the same opportunity.
   const now = new Date();
-  if (!isAlchemistTradingWindow(now)) {
-    return [];
-  }
-
   const symbols = await discoverSymbols();
   const marketData = await loadAllMarkets(symbols);
   const results = [];
@@ -829,24 +807,133 @@ async function generateSignals() {
   for (const item of symbols) {
     const market = marketData[item.symbol];
     if (!market) continue;
-
     const candidates = [];
+
     for (const entryTF of ENTRY_TIMEFRAMES) {
-      const signal = analyzeAlchemistInstrument(item, market, entryTF, now);
-      if (signal) candidates.push(signal);
+      // Existing confirmed structure/CRT engine and the independent flexible checks.
+      const legacy = analyzeInstrument(item, market, entryTF);
+      if (legacy && isTradeableSignal(legacy)) candidates.push(fixSignalRiskReward(legacy, now));
+
+      const alchemist = analyzeAlchemistInstrument(item, market, entryTF, now);
+      if (alchemist && isTradeableSignal(alchemist)) candidates.push(fixSignalRiskReward(alchemist, now));
+
+      for (const signal of detectIndependentSetups(item, market, entryTF, now)) {
+        if (isTradeableSignal(signal)) candidates.push(fixSignalRiskReward(signal, now));
+      }
     }
 
-    // One clearest confirmed signal per instrument per scan.
-    candidates.sort((a, b) => {
-      const modulePriority = (b.modulePriority || 0) - (a.modulePriority || 0);
-      if (modulePriority) return modulePriority;
-      return tfPriority(b.entryTFRaw) - tfPriority(a.entryTFRaw);
-    });
-
-    if (candidates.length) results.push(candidates[0]);
+    results.push(...mergeSameOpportunities(candidates));
   }
 
+  return results.filter(signal => signal && signal.status === "CONFIRMED");
+}
+
+function isTradeableSignal(signal) {
+  const allowedStatus = signal && ["CONFIRMED", "VALID SETUP"].includes(String(signal.status || "").toUpperCase());
+  return !!signal && allowedStatus && ["BUY", "SELL"].includes(signal.direction) &&
+    Number.isFinite(Number(signal.entry)) && Number.isFinite(Number(signal.stopLoss)) &&
+    Number(signal.entry) > 0 && Number(signal.stopLoss) > 0 &&
+    (signal.direction === "BUY" ? Number(signal.stopLoss) < Number(signal.entry) : Number(signal.stopLoss) > Number(signal.entry));
+}
+
+function fixSignalRiskReward(signal, now = new Date()) {
+  const entry = Number(signal.entry);
+  const stop = Number(signal.stopLoss);
+  const risk = Math.abs(entry - stop);
+  if (!risk || !Number.isFinite(risk)) return null;
+  const target = signal.direction === "BUY" ? entry + risk * 8 : entry - risk * 8;
+  return {
+    ...signal,
+    instrument: "XAUUSD",
+    symbol: "XAUUSD",
+    takeProfit: roundPrice(target),
+    riskReward: "1:8",
+    status: "CONFIRMED",
+    session: getTradingSession(now).name,
+    signalTime: signal.signalTime || now.toISOString(),
+    managementNote: "Consider moving Stop Loss to Break-Even only when price has moved sufficiently in your favour and market structure supports protecting capital."
+  };
+}
+
+function detectIndependentSetups(item, market, entryTF, now = new Date()) {
+  const data = market[entryTF];
+  if (!data || data.status !== "success" || !Array.isArray(data.candles)) return [];
+  const candles = normalizeCandles(data.candles).filter(c => !c.isOpen);
+  if (candles.length < 40) return [];
+  const current = candles[candles.length - 1];
+  const previous = candles[candles.length - 2];
+  const atr = ATR(candles);
+  if (!atr || !current || !previous) return [];
+
+  const recent = candles.slice(-8, -1);
+  const priorHigh = Math.max(...candles.slice(-21, -1).map(c => c.high));
+  const priorLow = Math.min(...candles.slice(-21, -1).map(c => c.low));
+  const recentLow = Math.min(...recent.map(c => c.low));
+  const recentHigh = Math.max(...recent.map(c => c.high));
+  const body = Math.abs(current.close - current.open);
+  const results = [];
+  const add = (direction, entry, stop, family) => {
+    if (!Number.isFinite(entry) || !Number.isFinite(stop)) return;
+    if (direction === "BUY" && stop >= entry) return;
+    if (direction === "SELL" && stop <= entry) return;
+    results.push({
+      instrument: "XAUUSD", symbol: "XAUUSD", category: "COMMODITY", direction,
+      orderType: direction === "BUY" ? "BUY" : "SELL",
+      entryTF: formatTF(entryTF), entryTFRaw: entryTF,
+      entry: roundPrice(entry), stopLoss: roundPrice(stop),
+      takeProfit: roundPrice(direction === "BUY" ? entry + (entry - stop) * 8 : entry - (stop - entry) * 8),
+      riskReward: "1:8", status: "CONFIRMED", setupType: family,
+      signalTime: current.time || now.toISOString(), session: getTradingSession(now).name,
+      managementNote: "Consider moving Stop Loss to Break-Even only when price has moved sufficiently in your favour and market structure supports protecting capital."
+    });
+  };
+
+  // CRT: sweep a recent candle-range extreme and close back inside the range.
+  if (current.low < priorLow && current.close > priorLow && current.close > current.open) {
+    add("BUY", current.close, Math.min(current.low, recentLow) - atr * 0.12, "CRT");
+  }
+  if (current.high > priorHigh && current.close < priorHigh && current.close < current.open) {
+    add("SELL", current.close, Math.max(current.high, recentHigh) + atr * 0.12, "CRT");
+  }
+
+  // APA / pure price action proxy: strong engulfing close after a recent swing test.
+  const bullishEngulf = current.close > current.open && previous.close < previous.open && current.close >= previous.open && current.open <= previous.close;
+  const bearishEngulf = current.close < current.open && previous.close > previous.open && current.close <= previous.open && current.open >= previous.close;
+  if (bullishEngulf && body >= atr * 0.45 && current.low <= recentLow + atr * 0.25) {
+    add("BUY", current.close, Math.min(current.low, recentLow) - atr * 0.12, "APA/price-action");
+  }
+  if (bearishEngulf && body >= atr * 0.45 && current.high >= recentHigh - atr * 0.25) {
+    add("SELL", current.close, Math.max(current.high, recentHigh) + atr * 0.12, "APA/price-action");
+  }
+
+  // MSNR proxy: a recent higher-timeframe swing level is retested and rejected.
+  const levels = getHigherTimeframeLevels(market, timeframeMinutes(entryTF), now);
+  const tolerance = Math.max(atr * 0.25, Math.abs(current.close) * 0.0001);
+  const level = levels.find(x => Math.abs(current.low - x.price) <= tolerance || Math.abs(current.high - x.price) <= tolerance || (current.low <= x.price + tolerance && current.high >= x.price - tolerance));
+  if (level && current.close > current.open && current.close > level.price && current.low <= level.price + tolerance) {
+    add("BUY", current.close, Math.min(current.low, recentLow) - atr * 0.12, "MSNR");
+  }
+  if (level && current.close < current.open && current.close < level.price && current.high >= level.price - tolerance) {
+    add("SELL", current.close, Math.max(current.high, recentHigh) + atr * 0.12, "MSNR");
+  }
   return results;
+}
+
+function mergeSameOpportunities(candidates) {
+  const merged = [];
+  const sorted = candidates.filter(Boolean).sort((a, b) => tfPriority(b.entryTFRaw) - tfPriority(a.entryTFRaw));
+  for (const signal of sorted) {
+    const entry = Number(signal.entry);
+    const existing = merged.find(x => x.direction === signal.direction &&
+      Math.abs(Number(x.entry) - entry) <= Math.max(Math.abs(entry) * 0.00035, Math.abs(Number(x.entry) - Number(x.stopLoss)) * 0.35));
+    if (!existing) {
+      merged.push({ ...signal, takeProfit: Number(signal.takeProfit), riskReward: "1:8" });
+      continue;
+    }
+    // One alert for overlapping strategy detections; keep the clearer existing entry/TF.
+    existing.confirmations = (existing.confirmations || 1) + 1;
+  }
+  return merged;
 }
 
 
@@ -1236,7 +1323,7 @@ Traders, get ready! The London trading session is beginning.
 ⏰ Session Time: 2:00 AM – 5:00 AM (New York Time)
 🇳🇬 Nigeria Time: ${formatWatTime(120, now)} – ${formatWatTime(300, now)} (WAT)
 
-📊 Trading Pairs: XAUUSD & BTCUSD
+📊 Trading Pair: XAUUSD
 
 ⚠️ The session opening does not guarantee an immediate signal. CyberFX will wait for valid entry conditions before generating a signal.
 
@@ -1264,7 +1351,7 @@ Traders, get ready! The New York AM trading session is beginning.
 ⏰ Session Time: 8:30 AM – 11:00 AM (New York Time)
 🇳🇬 Nigeria Time: ${formatWatTime(510, now)} – ${formatWatTime(660, now)} (WAT)
 
-📊 Trading Pairs: XAUUSD & BTCUSD
+📊 Trading Pair: XAUUSD
 
 ⚠️ The session opening does not guarantee an immediate signal. CyberFX will wait for valid entry conditions before generating a signal.
 
@@ -1281,10 +1368,12 @@ God Over Man`
 function getTradingSession(time) {
   const p = nyTimeParts(new Date(time));
   const minuteOfDay = p.hour * 60 + p.minute;
-  if (minuteOfDay >= 120 && minuteOfDay < 300) return { name: "London Killzone" };
-  if (minuteOfDay >= 510 && minuteOfDay < 660) return { name: "New York AM Killzone" };
-  if (minuteOfDay >= 1200 || minuteOfDay < 0) return { name: "Asian Range — No Trading" };
-  return { name: "Outside Alchemist Trading Window" };
+  if (minuteOfDay >= 120 && minuteOfDay < 300) return { name: "London" };
+  if (minuteOfDay >= 510 && minuteOfDay < 660) return { name: "New York" };
+  if (minuteOfDay >= 1200 || minuteOfDay < 0) return { name: "Asian" };
+  if (minuteOfDay >= 0 && minuteOfDay < 120) return { name: "Asian" };
+  if (minuteOfDay >= 300 && minuteOfDay < 510) return { name: "London / Pre-New York" };
+  return { name: "New York / Other" };
 }
 
 // ============================================================
@@ -4195,15 +4284,10 @@ async function runAutomaticScan(env) {
     await sendSessionOpeningAlerts(env, recipients);
     await runEconomicNewsAlerts(env, recipients);
 
-    if (!isAlchemistTradingWindow(new Date())) {
-      console.log("CYBERFX: Outside the Alchemist London/New York killzones; no entries will be generated.");
-      return;
-    }
-
     const signals = await generateSignals();
     const active = signals.filter(signal => signal.status === "CONFIRMED");
     if (!active.length) {
-      console.log("CYBERFX Alchemist: no confirmed setups in this scan.");
+      console.log("CYBERFX: no confirmed XAUUSD setups in this scan.");
       return;
     }
 
@@ -4619,24 +4703,21 @@ async function markSignalSent(
 // ============================================================
 
 function formatTelegramSignal(signal) {
-  const icon = signal.direction === "BUY" ? "🟢" : "🔴";
-  return `${icon} CYBERFX ALCHEMIST SIGNAL
+  const icon = signal.direction === "BUY" ? "🔥" : "🔥";
+  return `${icon} CYBERFX ${signal.direction} SIGNAL — XAUUSD
 
-${signal.instrument} — ${signal.direction}
+* Entry: ${signal.entry}
+* Stop Loss: ${signal.stopLoss}
+* Take Profit: ${signal.takeProfit}
+* Risk-to-Reward: 1:8
+* Entry Timeframe: ${signal.entryTF}
+* Session: ${signal.session}
 
-🎯 Setup: ${signal.setupType || "Alchemist entry"}
-⏱️ Entry Timeframe: ${signal.entryTF}
-📍 Entry: ${signal.entry}
-🛑 Stop Loss: ${signal.stopLoss}
-💎 Target: ${signal.takeProfit}
-📐 Risk/Reward to swing target: ${signal.riskReward || "Swing target"}
-🕒 Session: ${signal.session}
+📌 Trade Management Note: Consider moving Stop Loss to Break-Even only when price has moved sufficiently in your favour and market structure supports protecting capital.
 
-📌 Trade Management Note: ${signal.managementNote || "Consider Break-Even only when price and market structure justify protecting capital."}
+⚠️ Wait for valid entry conditions and manage risk responsibly
 
-⚠️ Wait for valid entry conditions and manage risk responsibly.
-
-God Over Man`;
+GOD OVER MAN.`;
 }
 
 // ============================================================
