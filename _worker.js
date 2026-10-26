@@ -812,13 +812,21 @@ async function generateSignals() {
     for (const entryTF of ENTRY_TIMEFRAMES) {
       // Existing confirmed structure/CRT engine and the independent flexible checks.
       const legacy = analyzeInstrument(item, market, entryTF);
-      if (legacy && isTradeableSignal(legacy)) candidates.push(fixSignalRiskReward(legacy, now));
+      if (legacy && isTradeableSignal(legacy)) {
+        const prepared = prepareSignalForExecution(legacy, market, entryTF, now);
+        if (prepared) candidates.push(prepared);
+      }
 
       const alchemist = analyzeAlchemistInstrument(item, market, entryTF, now);
-      if (alchemist && isTradeableSignal(alchemist)) candidates.push(fixSignalRiskReward(alchemist, now));
+      if (alchemist && isTradeableSignal(alchemist)) {
+        const prepared = prepareSignalForExecution(alchemist, market, entryTF, now);
+        if (prepared) candidates.push(prepared);
+      }
 
       for (const signal of detectIndependentSetups(item, market, entryTF, now)) {
-        if (isTradeableSignal(signal)) candidates.push(fixSignalRiskReward(signal, now));
+        if (!isTradeableSignal(signal)) continue;
+        const prepared = prepareSignalForExecution(signal, market, entryTF, now);
+        if (prepared) candidates.push(prepared);
       }
     }
 
@@ -826,6 +834,66 @@ async function generateSignals() {
   }
 
   return results.filter(signal => signal && signal.status === "CONFIRMED");
+}
+
+// Decide whether a confirmed setup is executable now or needs a pullback.
+// BUY LIMIT must be strictly below CMP; SELL LIMIT must be strictly above CMP.
+function prepareSignalForExecution(signal, market, entryTF, now = new Date()) {
+  const candlesData = market?.[entryTF];
+  const rawCandles = candlesData?.candles;
+  if (!Array.isArray(rawCandles) || !rawCandles.length) return null;
+  const candles = normalizeCandles(rawCandles);
+  const latest = [...candles].reverse().find(c => Number.isFinite(c.close) && c.close > 0);
+  if (!latest) return null;
+
+  const cmp = Number(latest.close);
+  const proposedEntry = Number(signal.entry);
+  if (!Number.isFinite(proposedEntry) || proposedEntry <= 0) return null;
+
+  // Treat an entry very near the latest market price as an immediate market entry.
+  const proximity = Math.max(Math.abs(cmp) * 0.00015, Math.abs(cmp) * 0.00001);
+  let orderType;
+  let entry;
+  if (Math.abs(proposedEntry - cmp) <= proximity) {
+    entry = cmp;
+    orderType = signal.direction === "BUY" ? "BUY AT CMP" : "SELL AT CMP";
+  } else if (signal.direction === "BUY" && proposedEntry < cmp) {
+    entry = proposedEntry;
+    orderType = "BUY LIMIT";
+  } else if (signal.direction === "SELL" && proposedEntry > cmp) {
+    entry = proposedEntry;
+    orderType = "SELL LIMIT";
+  } else {
+    // Do not publish a limit order on the wrong side of current price.
+    return null;
+  }
+
+  const stop = Number(signal.stopLoss);
+  if (!Number.isFinite(stop)) return null;
+  if (signal.direction === "BUY" && stop >= entry) return null;
+  if (signal.direction === "SELL" && stop <= entry) return null;
+
+  // Calculate RR from the exact displayed entry and stop values so the published
+  // levels preserve 1:8 after price precision is applied.
+  entry = roundPrice(entry);
+  const displayedStop = roundPrice(stop);
+  const risk = Math.abs(entry - displayedStop);
+  if (!(risk > 0)) return null;
+  const takeProfit = signal.direction === "BUY" ? entry + risk * 8 : entry - risk * 8;
+  return {
+    ...signal,
+    instrument: "XAUUSD",
+    symbol: "XAUUSD",
+    orderType,
+    entry,
+    stopLoss: displayedStop,
+    takeProfit: roundPrice(takeProfit),
+    riskReward: "1:8",
+    status: "CONFIRMED",
+    session: getTradingSession(now).name,
+    signalTime: signal.signalTime || now.toISOString(),
+    managementNote: "BE when necessary"
+  };
 }
 
 function isTradeableSignal(signal) {
@@ -4703,19 +4771,24 @@ async function markSignalSent(
 // ============================================================
 
 function formatTelegramSignal(signal) {
-  const icon = signal.direction === "BUY" ? "🔥" : "🔥";
-  return `${icon} CYBERFX ${signal.direction} SIGNAL — XAUUSD
+  const orderType = signal.orderType || (signal.direction === "BUY" ? "BUY AT CMP" : "SELL AT CMP");
+  const entryLabel = orderType === "BUY AT CMP" || orderType === "SELL AT CMP"
+    ? `${orderType}!!`
+    : `${orderType}!!`;
+  return `🔥 CYBERFX ${signal.direction} SIGNAL — XAUUSD
 
-* Entry: ${signal.entry}
+${entryLabel}
+
+* Entry: ${signal.entry}${orderType.includes("CMP") ? " (Current Market Price)" : ""}
 * Stop Loss: ${signal.stopLoss}
 * Take Profit: ${signal.takeProfit}
 * Risk-to-Reward: 1:8
 * Entry Timeframe: ${signal.entryTF}
 * Session: ${signal.session}
 
-📌 Trade Management Note: Consider moving Stop Loss to Break-Even only when price has moved sufficiently in your favour and market structure supports protecting capital.
+📌 Trade Management Note: BE when necessary
 
-⚠️ Wait for valid entry conditions and manage risk responsibly
+⚠️ Trade responsibly and manage risk.
 
 GOD OVER MAN.`;
 }
