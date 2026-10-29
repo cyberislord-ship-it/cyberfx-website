@@ -11,16 +11,16 @@ export default {
       return json({
         success: true,
         engine: "CyberFX",
-        version: "4.0.0-unified-xauusd",
+        version: "4.1.0-m15-close",
         status: "online",
         market_data: "Bybit Public API",
         bybit_connected: bybitConnected,
         telegram_connected: !!env.TELEGRAM_BOT_TOKEN,
         paystack_connected: !!env.PAYSTACK_SECRET_KEY,
         database_connected: !!env.DB,
-        strategy: "Unified APA + MSNR signal engine",
+        strategy: "Unified signal engine",
         instruments: ["XAUUSD"],
-        scan_interval_minutes: 60,
+        scan_interval_minutes: 15,
         trading_sessions: ["Asian", "London", "New York"],
         session_timezone: "America/New_York",
         risk_reward: "1:8",
@@ -412,7 +412,7 @@ export default {
           success: true,
           engine: "CyberFX",
           source: "Bybit Public API",
-          strategy: "Unified APA + MSNR signal engine",
+          strategy: "Unified signal engine",
           risk_reward: "1:8",
           markets: symbols,
           timeframes: TIMEFRAMES.map(
@@ -448,11 +448,10 @@ export default {
           success: true,
           engine: "CyberFX",
           source: "Bybit Public API",
-          strategy: "Unified APA + MSNR signal engine",
+          strategy: "Unified signal engine",
           instruments: ["XAUUSD"],
-          scan_interval_minutes: 60,
           risk_reward: "1:8",
-          signal_levels: ["DEVELOPING", "CONFIRMED"],
+          signal_levels: ["CONFIRMED"],
           signals: result
         });
 
@@ -591,11 +590,10 @@ const TIMEFRAMES = [
   { name: "1d", interval: "1d" }
 ];
 
-// Flexible entry timeframes. The signal reports the exact timeframe
-// on which the Alchemist trigger was confirmed.
+// Signal decisions are evaluated only on a fully closed M15 candle.
+// M30, H1 and H4 remain available as higher-timeframe market context.
 const ENTRY_TIMEFRAMES = [
-  "15min",
-  "30min"
+  "15min"
 ];
 
 const CONFIRMED_SCORE = 13;
@@ -796,9 +794,8 @@ async function loadAllMarkets(symbols) {
 // ============================================================
 
 async function generateSignals() {
-  // Unified APA + MSNR engine. Strategy names remain internal and are never
-  // included in subscriber-facing messages. 4H/1H provide context through the
-  // higher-timeframe levels; 30M/15M are the entry-confirmation timeframes.
+  // Scan XAUUSD in every session. Each setup family is evaluated independently;
+  // overlapping detections are merged into one alert for the same opportunity.
   const now = new Date();
   const symbols = await discoverSymbols();
   const marketData = await loadAllMarkets(symbols);
@@ -807,57 +804,33 @@ async function generateSignals() {
   for (const item of symbols) {
     const market = marketData[item.symbol];
     if (!market) continue;
+    const candidates = [];
 
     for (const entryTF of ENTRY_TIMEFRAMES) {
-      const raw = detectIndependentSetups(item, market, entryTF, now)
-        .filter(s => s && ["APA/price-action", "MSNR"].includes(s.setupType));
-      const buys = raw.filter(s => s.direction === "BUY");
-      const sells = raw.filter(s => s.direction === "SELL");
-      const buyConfirmed = buys.some(s => s.setupType === "APA/price-action") && buys.some(s => s.setupType === "MSNR");
-      const sellConfirmed = sells.some(s => s.setupType === "APA/price-action") && sells.some(s => s.setupType === "MSNR");
-      // If methods point in opposite directions, stay silent unless one direction
-      // has agreement from both methods. If both directions appear fully confirmed,
-      // treat that as conflict and wait for a cleaner setup.
-      if (buyConfirmed && sellConfirmed) continue;
-      if (buys.length && sells.length && !buyConfirmed && !sellConfirmed) continue;
-      if (buyConfirmed) sells.splice(0, sells.length);
-      if (sellConfirmed) buys.splice(0, buys.length);
+      // Existing confirmed structure/CRT engine and the independent flexible checks.
+      const legacy = analyzeInstrument(item, market, entryTF);
+      if (legacy && isTradeableSignal(legacy)) {
+        const prepared = prepareSignalForExecution(legacy, market, entryTF, now);
+        if (prepared) candidates.push(prepared);
+      }
 
-      for (const group of [buys, sells]) {
-        if (!group.length) continue;
-        const hasAPA = group.some(s => s.setupType === "APA/price-action");
-        const hasMSNR = group.some(s => s.setupType === "MSNR");
-        // One or both methods may flag a developing opportunity. A confirmed
-        // signal requires both methods to agree on the same direction/timeframe.
-        const best = group.find(s => s.setupType === "MSNR") || group[0];
-        const candidate = {
-          ...best,
-          instrument: item.symbol,
-          symbol: item.symbol,
-          entryTF: formatTF(entryTF),
-          entryTFRaw: entryTF,
-          status: hasAPA && hasMSNR ? "CONFIRMED" : "DEVELOPING",
-          internalConfirmations: { apa: hasAPA, msnr: hasMSNR }
-        };
-        const prepared = prepareSignalForExecution(candidate, market, entryTF, now);
-        if (!prepared) continue;
-        prepared.status = candidate.status;
-        // Do not leak setupType or internalConfirmations into Telegram text.
-        results.push(prepared);
+      const alchemist = analyzeAlchemistInstrument(item, market, entryTF, now);
+      if (alchemist && isTradeableSignal(alchemist)) {
+        const prepared = prepareSignalForExecution(alchemist, market, entryTF, now);
+        if (prepared) candidates.push(prepared);
+      }
+
+      for (const signal of detectIndependentSetups(item, market, entryTF, now)) {
+        if (!isTradeableSignal(signal)) continue;
+        const prepared = prepareSignalForExecution(signal, market, entryTF, now);
+        if (prepared) candidates.push(prepared);
       }
     }
+
+    results.push(...mergeSameOpportunities(candidates));
   }
 
-  // Prefer the strongest timeframe when detections overlap, and emit only one
-  // candidate per direction for this instrument in a scan.
-  const deduped = [];
-  for (const signal of results.sort((a, b) => tfPriority(b.entryTFRaw) - tfPriority(a.entryTFRaw))) {
-    const duplicate = deduped.find(x => x.symbol === signal.symbol && x.direction === signal.direction &&
-      Math.abs(Number(x.entry) - Number(signal.entry)) <= Math.max(Number(signal.entry) * 0.00035, 0.01));
-    if (!duplicate) deduped.push(signal);
-    else if (signal.status === "CONFIRMED") duplicate.status = "CONFIRMED";
-  }
-  return deduped;
+  return results.filter(signal => signal && signal.status === "CONFIRMED");
 }
 
 // Decide whether a confirmed setup is executable now or needs a pullback.
@@ -910,7 +883,6 @@ function prepareSignalForExecution(signal, market, entryTF, now = new Date()) {
     symbol: "XAUUSD",
     orderType,
     entry,
-    currentPrice: roundPrice(cmp),
     stopLoss: displayedStop,
     takeProfit: roundPrice(takeProfit),
     riskReward: "1:8",
@@ -4166,9 +4138,9 @@ ${WEBSITE_URL}`,
       if (!active.length) {
         await sendTelegramMessage(
           chatId,
-          `CYBERFX
+          `CYBERFX ALCHEMIST
 
-No developing or confirmed XAUUSD opportunity is available in this scan.`,
+No confirmed Alchemist setup is available right now. Signals are generated only during the London Killzone (2:00–5:00 AM New York time) and New York AM Killzone (8:30–11:00 AM New York time).`,
           env.TELEGRAM_BOT_TOKEN
         );
 
@@ -4180,9 +4152,9 @@ No developing or confirmed XAUUSD opportunity is available in this scan.`,
       ) {
         await sendTelegramMessage(
           chatId,
-          signal.status === "DEVELOPING"
-            ? formatDevelopingOpportunity(signal)
-            : formatTelegramSignal(signal),
+          formatTelegramSignal(
+            signal
+          ),
           env.TELEGRAM_BOT_TOKEN
         );
       }
@@ -4197,7 +4169,7 @@ No developing or confirmed XAUUSD opportunity is available in this scan.`,
         chatId,
         `CYBERFX
 
-Signal engine temporarily unavailable. Please retry shortly; the failure has been logged for diagnosis.`,
+Signal engine temporarily unavailable.`,
         env.TELEGRAM_BOT_TOKEN
       );
     }
@@ -4373,133 +4345,82 @@ async function runAutomaticScan(env) {
   }
 
   try {
+    // Cron is configured for every 15 minutes. This extra guard ensures a
+    // given closed M15 candle is processed only once, even if Cloudflare
+    // retries or the schedule is accidentally duplicated.
+    const scanGate = await claimClosedM15Scan(env);
+    if (!scanGate.shouldRun) {
+      console.log(`CYBERFX: M15 candle ${scanGate.key || "not ready"} already scanned or unavailable; skipping duplicate run.`);
+      return;
+    }
+
     const recipients = await getAuthorizedTelegramIds(env);
     await sendSessionOpeningAlerts(env, recipients);
     await runEconomicNewsAlerts(env, recipients);
 
-    const candidates = await generateSignals();
-    if (!candidates.length) {
-      console.log("CYBERFX: no APA/MSNR developing or confirmed XAUUSD opportunities in this hourly scan.");
+    const signals = await generateSignals();
+    const active = signals.filter(signal => signal.status === "CONFIRMED");
+    if (!active.length) {
+      console.log("CYBERFX: no confirmed XAUUSD setups in this scan.");
       return;
     }
 
-    await ensureOpportunityTable(env);
-    if (!env.DB) {
-      // Without D1, the engine cannot remember that it already sent a developing
-      // alert, so it must not send repeat alerts or bypass the hourly confirmation.
-      return;
-    }
-    for (const signal of candidates) {
-      const key = opportunityKey(signal);
-      const prior = env.DB ? await env.DB.prepare(
-        "SELECT state, first_seen_at, last_seen_at FROM signal_opportunities WHERE opportunity_key = ? LIMIT 1"
-      ).bind(key).first() : null;
+    for (const signal of active) {
+      const signature = createSignalSignature(signal);
+      if (await wasSignalSent(signature, env)) continue;
 
-      // Discard stale developing states; a setup must be re-seen within two hours
-      // before it can be promoted to a confirmed signal.
-      let usablePrior = prior;
-      if (prior && String(prior.state) === "DEVELOPING" && prior.last_seen_at) {
-        const lastSeenMs = Date.parse(String(prior.last_seen_at).replace(" ", "T") + (String(prior.last_seen_at).endsWith("Z") ? "" : "Z"));
-        if (Number.isFinite(lastSeenMs) && Date.now() - lastSeenMs > 2 * 60 * 60 * 1000) {
-          await env.DB.prepare("DELETE FROM signal_opportunities WHERE opportunity_key = ?").bind(key).run();
-          usablePrior = null;
-        }
+      let delivered = false;
+      for (const chatId of recipients) {
+        const result = await sendTelegramMessage(chatId, formatTelegramSignal(signal), env.TELEGRAM_BOT_TOKEN);
+        if (result?.ok) delivered = true;
       }
-
-      // First detection: notify subscribers that an opportunity is developing.
-      // Even if both methods already agree, the complete entry is held until a
-      // later hourly scan revalidates it.
-      if (!usablePrior) {
-        let delivered = false;
-        for (const chatId of recipients) {
-          const result = await sendTelegramMessage(chatId, formatDevelopingOpportunity(signal), env.TELEGRAM_BOT_TOKEN);
-          if (result?.ok) delivered = true;
-        }
-        if (delivered && env.DB) {
-          await env.DB.prepare(`INSERT OR IGNORE INTO signal_opportunities
-            (opportunity_key, symbol, direction, entry_tf, state, first_seen_at, last_seen_at)
-            VALUES (?, ?, ?, ?, 'DEVELOPING', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
-            .bind(key, signal.symbol || signal.instrument, signal.direction, signal.entryTF || signal.entryTFRaw || "").run();
-        }
-        continue;
-      }
-
-      // On a subsequent hourly scan, send the full signal only if APA and MSNR
-      // still agree. A one-method-only candidate remains developing.
-      if (String(usablePrior.state) === "DEVELOPING") {
-        if (signal.status !== "CONFIRMED") {
-          if (env.DB) await env.DB.prepare("UPDATE signal_opportunities SET last_seen_at = CURRENT_TIMESTAMP WHERE opportunity_key = ?")
-            .bind(key).run();
-          continue;
-        }
-        let delivered = false;
-        for (const chatId of recipients) {
-          const result = await sendTelegramMessage(chatId, formatTelegramSignal(signal), env.TELEGRAM_BOT_TOKEN);
-          if (result?.ok) delivered = true;
-        }
-        if (delivered && env.DB) {
-          await env.DB.prepare("UPDATE signal_opportunities SET state = 'CONFIRMED', last_seen_at = CURRENT_TIMESTAMP WHERE opportunity_key = ?")
-            .bind(key).run();
-          const signature = createSignalSignature({ ...signal, signalTime: key });
-          await markSignalSent(signature, signal, env);
-        }
-      }
-    }
-
-    if (env.DB) {
-      // Keep state bounded and expire old opportunities so a future setup can alert again.
-      await env.DB.prepare("DELETE FROM signal_opportunities WHERE last_seen_at < datetime('now', '-12 hours')").run();
+      if (delivered) await markSignalSent(signature, signal, env);
     }
   } catch (error) {
-    console.error("Automatic scan error:", error?.stack || error?.message || error);
+    console.error("Automatic scan error:", error);
   }
 }
 
-async function ensureOpportunityTable(env) {
+
+// Claim one scheduled scan per newly closed M15 candle. If D1 is not bound,
+// scanning continues but duplicate protection cannot be guaranteed.
+async function claimClosedM15Scan(env) {
+  const data = await getCandles("XAUUSD", "15m");
+  if (!data || data.status !== "success" || !Array.isArray(data.candles)) {
+    console.error("CYBERFX: cannot verify the latest closed M15 candle; scheduled scan skipped.");
+    return { shouldRun: false, key: null };
+  }
+
+  const closed = normalizeCandles(data.candles).filter(c => !c.isOpen && c.time);
+  const latest = closed[closed.length - 1];
+  if (!latest) {
+    console.error("CYBERFX: no fully closed M15 candle is available; scheduled scan skipped.");
+    return { shouldRun: false, key: null };
+  }
+
+  const key = `xauusd-m15:${new Date(latest.time).getTime()}`;
   if (!env.DB) {
-    console.error("D1 is unavailable: developing-to-confirmed state cannot persist between hourly scans.");
-    return;
+    console.warn("CYBERFX: D1 binding is missing; continuing M15 scan without duplicate protection.");
+    return { shouldRun: true, key };
   }
-  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS signal_opportunities (
-    opportunity_key TEXT PRIMARY KEY,
-    symbol TEXT NOT NULL,
-    direction TEXT NOT NULL,
-    entry_tf TEXT,
-    state TEXT NOT NULL,
-    first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS scan_runs (
+    scan_key TEXT PRIMARY KEY,
+    scanned_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`).run();
-}
 
-function opportunityKey(signal) {
-  // Keep the developing-to-confirmed state stable if the best entry timeframe
-  // shifts between 15M and 30M on the next hourly scan.
-  return [signal.symbol || signal.instrument || "XAUUSD", signal.direction]
-    .map(x => String(x).replace(/\s+/g, "_")).join("|");
-}
+  const existing = await env.DB.prepare(
+    "SELECT scan_key FROM scan_runs WHERE scan_key = ? LIMIT 1"
+  ).bind(key).first();
+  if (existing) return { shouldRun: false, key };
 
-function formatDevelopingOpportunity(signal) {
-  const currentPrice = signal.currentPrice ?? signal.entry;
-  return `⚠️ CYBERFX DEVELOPING OPPORTUNITY — ${signal.symbol || signal.instrument || "XAUUSD"}
+  const claim = await env.DB.prepare(
+    "INSERT OR IGNORE INTO scan_runs (scan_key) VALUES (?)"
+  ).bind(key).run();
+  if (Number(claim?.meta?.changes || 0) < 1) return { shouldRun: false, key };
 
-` +
-    `📊 Potential Direction: ${signal.direction}
-` +
-    `💰 Current Price: ${currentPrice}
-` +
-    `🕒 Timeframes: 4H / 1H / 30M / 15M
-
-` +
-    `📍 Status: Setup Developing
-
-` +
-    `⏳ Awaiting entry confirmation.
-
-` +
-    `⚠️ NOT A CONFIRMED SIGNAL. DO NOT ENTER YET.
-
-` +
-    `GOD OVER MAN.`;
+  await env.DB.prepare(`DELETE FROM scan_runs WHERE scanned_at < datetime('now', '-14 days')`).run();
+  return { shouldRun: true, key };
 }
 
 async function sendSessionOpeningAlerts(env, recipients) {
@@ -4913,7 +4834,7 @@ ${entryLabel}
 * Entry Timeframe: ${signal.entryTF}
 * Session: ${signal.session}
 
-BE when necessary
+📌 Trade Management Note: BE when necessary
 
 ⚠️ Trade responsibly and manage risk.
 
