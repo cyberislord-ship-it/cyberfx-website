@@ -11,7 +11,7 @@ export default {
       return json({
         success: true,
         engine: "CyberFX",
-        version: "4.1.0-m15-close",
+        version: "4.3.0-adaptive-m15-limit-only",
         status: "online",
         market_data: "Bybit Public API",
         bybit_connected: bybitConnected,
@@ -23,7 +23,7 @@ export default {
         scan_interval_minutes: 15,
         trading_sessions: ["Asian", "London", "New York"],
         session_timezone: "America/New_York",
-        risk_reward: "1:8",
+        risk_reward: "1:4",
         trial_days: 21
       });
     }
@@ -413,7 +413,7 @@ export default {
           engine: "CyberFX",
           source: "Bybit Public API",
           strategy: "Unified signal engine",
-          risk_reward: "1:8",
+          risk_reward: "1:4",
           markets: symbols,
           timeframes: TIMEFRAMES.map(
             x => x.name
@@ -450,7 +450,7 @@ export default {
           source: "Bybit Public API",
           strategy: "Unified signal engine",
           instruments: ["XAUUSD"],
-          risk_reward: "1:8",
+          risk_reward: "1:4",
           signal_levels: ["CONFIRMED"],
           signals: result
         });
@@ -590,11 +590,9 @@ const TIMEFRAMES = [
   { name: "1d", interval: "1d" }
 ];
 
-// Signal decisions are evaluated only on a fully closed M15 candle.
-// M30, H1 and H4 remain available as higher-timeframe market context.
-const ENTRY_TIMEFRAMES = [
-  "15min"
-];
+// CyberFX signal entries are confirmed only on CLOSED M15 candles.
+// Higher timeframes remain available as market context, not entry triggers.
+const ENTRY_TIMEFRAMES = ["15min"];
 
 const CONFIRMED_SCORE = 13;
 
@@ -827,6 +825,13 @@ async function generateSignals() {
       }
     }
 
+    // If independent engines disagree on direction in the same scan, the market
+    // is ambiguous: do not merge contradictory BUY and SELL calls into alerts.
+    const directions = new Set(candidates.map(signal => signal.direction));
+    if (directions.size > 1) {
+      console.log("CYBERFX: conflicting XAUUSD directions; skipping this scan.");
+      continue;
+    }
     results.push(...mergeSameOpportunities(candidates));
   }
 
@@ -839,7 +844,7 @@ function prepareSignalForExecution(signal, market, entryTF, now = new Date()) {
   const candlesData = market?.[entryTF];
   const rawCandles = candlesData?.candles;
   if (!Array.isArray(rawCandles) || !rawCandles.length) return null;
-  const candles = normalizeCandles(rawCandles);
+  const candles = normalizeCandles(rawCandles).filter(c => !c.isOpen);
   const latest = [...candles].reverse().find(c => Number.isFinite(c.close) && c.close > 0);
   if (!latest) return null;
 
@@ -847,21 +852,18 @@ function prepareSignalForExecution(signal, market, entryTF, now = new Date()) {
   const proposedEntry = Number(signal.entry);
   if (!Number.isFinite(proposedEntry) || proposedEntry <= 0) return null;
 
-  // Treat an entry very near the latest market price as an immediate market entry.
-  const proximity = Math.max(Math.abs(cmp) * 0.00015, Math.abs(cmp) * 0.00001);
+  // LIMIT orders only. Never convert a setup into a market, stop, or CMP order.
+  // A BUY LIMIT must be strictly below CMP; a SELL LIMIT strictly above CMP.
+  const proximity = Math.abs(cmp) * 0.00001;
   let orderType;
-  let entry;
-  if (Math.abs(proposedEntry - cmp) <= proximity) {
-    entry = cmp;
-    orderType = signal.direction === "BUY" ? "BUY AT CMP" : "SELL AT CMP";
-  } else if (signal.direction === "BUY" && proposedEntry < cmp) {
-    entry = proposedEntry;
+  let entry = proposedEntry;
+  if (Math.abs(proposedEntry - cmp) <= proximity) return null;
+  if (signal.direction === "BUY" && proposedEntry < cmp) {
     orderType = "BUY LIMIT";
   } else if (signal.direction === "SELL" && proposedEntry > cmp) {
-    entry = proposedEntry;
     orderType = "SELL LIMIT";
   } else {
-    // Do not publish a limit order on the wrong side of current price.
+    // Wrong side of price: skip this setup rather than issue BUY/SELL STOP.
     return null;
   }
 
@@ -871,12 +873,12 @@ function prepareSignalForExecution(signal, market, entryTF, now = new Date()) {
   if (signal.direction === "SELL" && stop <= entry) return null;
 
   // Calculate RR from the exact displayed entry and stop values so the published
-  // levels preserve 1:8 after price precision is applied.
+  // levels preserve 1:4 after price precision is applied.
   entry = roundPrice(entry);
   const displayedStop = roundPrice(stop);
   const risk = Math.abs(entry - displayedStop);
   if (!(risk > 0)) return null;
-  const takeProfit = signal.direction === "BUY" ? entry + risk * 8 : entry - risk * 8;
+  const takeProfit = signal.direction === "BUY" ? entry + risk * 4 : entry - risk * 4;
   return {
     ...signal,
     instrument: "XAUUSD",
@@ -885,7 +887,7 @@ function prepareSignalForExecution(signal, market, entryTF, now = new Date()) {
     entry,
     stopLoss: displayedStop,
     takeProfit: roundPrice(takeProfit),
-    riskReward: "1:8",
+    riskReward: "1:4",
     status: "CONFIRMED",
     session: getTradingSession(now).name,
     signalTime: signal.signalTime || now.toISOString(),
@@ -906,13 +908,13 @@ function fixSignalRiskReward(signal, now = new Date()) {
   const stop = Number(signal.stopLoss);
   const risk = Math.abs(entry - stop);
   if (!risk || !Number.isFinite(risk)) return null;
-  const target = signal.direction === "BUY" ? entry + risk * 8 : entry - risk * 8;
+  const target = signal.direction === "BUY" ? entry + risk * 4 : entry - risk * 4;
   return {
     ...signal,
     instrument: "XAUUSD",
     symbol: "XAUUSD",
     takeProfit: roundPrice(target),
-    riskReward: "1:8",
+    riskReward: "1:4",
     status: "CONFIRMED",
     session: getTradingSession(now).name,
     signalTime: signal.signalTime || now.toISOString(),
@@ -946,8 +948,8 @@ function detectIndependentSetups(item, market, entryTF, now = new Date()) {
       orderType: direction === "BUY" ? "BUY" : "SELL",
       entryTF: formatTF(entryTF), entryTFRaw: entryTF,
       entry: roundPrice(entry), stopLoss: roundPrice(stop),
-      takeProfit: roundPrice(direction === "BUY" ? entry + (entry - stop) * 8 : entry - (stop - entry) * 8),
-      riskReward: "1:8", status: "CONFIRMED", setupType: family,
+      takeProfit: roundPrice(direction === "BUY" ? entry + (entry - stop) * 4 : entry - (stop - entry) * 4),
+      riskReward: "1:4", status: "CONFIRMED", setupType: family,
       signalTime: current.time || now.toISOString(), session: getTradingSession(now).name,
       managementNote: "Consider moving Stop Loss to Break-Even only when price has moved sufficiently in your favour and market structure supports protecting capital."
     });
@@ -992,7 +994,7 @@ function mergeSameOpportunities(candidates) {
     const existing = merged.find(x => x.direction === signal.direction &&
       Math.abs(Number(x.entry) - entry) <= Math.max(Math.abs(entry) * 0.00035, Math.abs(Number(x.entry) - Number(x.stopLoss)) * 0.35));
     if (!existing) {
-      merged.push({ ...signal, takeProfit: Number(signal.takeProfit), riskReward: "1:8" });
+      merged.push({ ...signal, takeProfit: Number(signal.takeProfit), riskReward: "1:4" });
       continue;
     }
     // One alert for overlapping strategy detections; keep the clearer existing entry/TF.
@@ -1441,6 +1443,47 @@ function getTradingSession(time) {
   return { name: "New York / Other" };
 }
 
+// Build the rejection candidate used by analyzeInstrument(). This function
+// was previously referenced but missing, which caused /api/generate-signals
+// and the Telegram /signal command to fail with ReferenceError.
+function buildRejectionSignal(item, entryTF, rejection, htfBias, current) {
+  if (!rejection || !current) return null;
+  const atr = ATR([current]);
+  const direction = rejection.direction === "bullish" ? "BUY"
+    : rejection.direction === "bearish" ? "SELL" : null;
+  if (!direction) return null;
+
+  // Use the rejection candle close for a reproducible closed-candle signal.
+  const entry = Number(current.close);
+  const candleRange = Math.max(Number(current.high) - Number(current.low), 0);
+  const padding = Math.max(candleRange * 0.12, Math.abs(entry) * 0.00008, atr ? atr * 0.15 : 0);
+  const stopLoss = direction === "BUY"
+    ? Number(current.low) - padding
+    : Number(current.high) + padding;
+  if (!(entry > 0) || !Number.isFinite(stopLoss) ||
+      (direction === "BUY" ? stopLoss >= entry : stopLoss <= entry)) return null;
+
+  const risk = Math.abs(entry - stopLoss);
+  return {
+    instrument: item.name || item.symbol || "XAUUSD",
+    symbol: item.symbol || "XAUUSD",
+    category: item.category || "COMMODITY",
+    direction,
+    orderType: direction === "BUY" ? "BUY LIMIT" : "SELL LIMIT",
+    entryTF: formatTF(entryTF),
+    entryTFRaw: entryTF,
+    entry: roundPrice(entry),
+    stopLoss: roundPrice(stopLoss),
+    takeProfit: roundPrice(direction === "BUY" ? entry + risk * 4 : entry - risk * 4),
+    riskReward: "1:4",
+    status: "CONFIRMED",
+    setupType: "Price-action rejection",
+    signalTime: current.time || new Date().toISOString(),
+    session: getTradingSession(current.time || new Date()).name,
+    managementNote: "BE when necessary"
+  };
+}
+
 // ============================================================
 // ANALYZE
 // ============================================================
@@ -1691,13 +1734,13 @@ function analyzeInstrument(
   }
 
   // ========================================================
-  // FINAL RR = 1:10
+  // FINAL RR = 1:4
   // ========================================================
 
   const takeProfit =
     structureBreak.direction === "bullish"
-      ? entry + risk * 10
-      : entry - risk * 10;
+      ? entry + risk * 4
+      : entry - risk * 4;
 
   const score =
     calculateScore({
@@ -1752,7 +1795,7 @@ function analyzeInstrument(
     takeProfit:
       roundPrice(takeProfit),
 
-    riskReward: "1:10",
+    riskReward: "1:4",
 
     status: "CONFIRMED",
 
@@ -2109,8 +2152,8 @@ function buildValidSetupSignal(
 
   const takeProfit =
     direction === "bullish"
-      ? entry + risk * 10
-      : entry - risk * 10;
+      ? entry + risk * 4
+      : entry - risk * 4;
 
   const components = [];
 
@@ -2179,7 +2222,7 @@ function buildValidSetupSignal(
     takeProfit:
       roundPrice(takeProfit),
 
-    riskReward: "1:10",
+    riskReward: "1:4",
 
     status: "VALID SETUP",
 
@@ -4138,9 +4181,9 @@ ${WEBSITE_URL}`,
       if (!active.length) {
         await sendTelegramMessage(
           chatId,
-          `CYBERFX ALCHEMIST
+          `CYBERFX
 
-No confirmed Alchemist setup is available right now. Signals are generated only during the London Killzone (2:00–5:00 AM New York time) and New York AM Killzone (8:30–11:00 AM New York time).`,
+No confirmed XAUUSD setup is available on the latest closed M15 candle. The engine checks CRT, MSNR, APA and price-action triggers independently; they do not all need to agree. Try again after the next M15 candle closes.`,
           env.TELEGRAM_BOT_TOKEN
         );
 
@@ -4345,15 +4388,6 @@ async function runAutomaticScan(env) {
   }
 
   try {
-    // Cron is configured for every 15 minutes. This extra guard ensures a
-    // given closed M15 candle is processed only once, even if Cloudflare
-    // retries or the schedule is accidentally duplicated.
-    const scanGate = await claimClosedM15Scan(env);
-    if (!scanGate.shouldRun) {
-      console.log(`CYBERFX: M15 candle ${scanGate.key || "not ready"} already scanned or unavailable; skipping duplicate run.`);
-      return;
-    }
-
     const recipients = await getAuthorizedTelegramIds(env);
     await sendSessionOpeningAlerts(env, recipients);
     await runEconomicNewsAlerts(env, recipients);
@@ -4379,48 +4413,6 @@ async function runAutomaticScan(env) {
   } catch (error) {
     console.error("Automatic scan error:", error);
   }
-}
-
-
-// Claim one scheduled scan per newly closed M15 candle. If D1 is not bound,
-// scanning continues but duplicate protection cannot be guaranteed.
-async function claimClosedM15Scan(env) {
-  const data = await getCandles("XAUUSD", "15m");
-  if (!data || data.status !== "success" || !Array.isArray(data.candles)) {
-    console.error("CYBERFX: cannot verify the latest closed M15 candle; scheduled scan skipped.");
-    return { shouldRun: false, key: null };
-  }
-
-  const closed = normalizeCandles(data.candles).filter(c => !c.isOpen && c.time);
-  const latest = closed[closed.length - 1];
-  if (!latest) {
-    console.error("CYBERFX: no fully closed M15 candle is available; scheduled scan skipped.");
-    return { shouldRun: false, key: null };
-  }
-
-  const key = `xauusd-m15:${new Date(latest.time).getTime()}`;
-  if (!env.DB) {
-    console.warn("CYBERFX: D1 binding is missing; continuing M15 scan without duplicate protection.");
-    return { shouldRun: true, key };
-  }
-
-  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS scan_runs (
-    scan_key TEXT PRIMARY KEY,
-    scanned_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-  )`).run();
-
-  const existing = await env.DB.prepare(
-    "SELECT scan_key FROM scan_runs WHERE scan_key = ? LIMIT 1"
-  ).bind(key).first();
-  if (existing) return { shouldRun: false, key };
-
-  const claim = await env.DB.prepare(
-    "INSERT OR IGNORE INTO scan_runs (scan_key) VALUES (?)"
-  ).bind(key).run();
-  if (Number(claim?.meta?.changes || 0) < 1) return { shouldRun: false, key };
-
-  await env.DB.prepare(`DELETE FROM scan_runs WHERE scanned_at < datetime('now', '-14 days')`).run();
-  return { shouldRun: true, key };
 }
 
 async function sendSessionOpeningAlerts(env, recipients) {
@@ -4819,18 +4811,17 @@ async function markSignalSent(
 // ============================================================
 
 function formatTelegramSignal(signal) {
-  const orderType = signal.orderType || (signal.direction === "BUY" ? "BUY AT CMP" : "SELL AT CMP");
-  const entryLabel = orderType === "BUY AT CMP" || orderType === "SELL AT CMP"
-    ? `${orderType}!!`
-    : `${orderType}!!`;
+  const orderType = signal.orderType;
+  if (!["BUY LIMIT", "SELL LIMIT"].includes(orderType)) return "";
+  const entryLabel = `${orderType}!!`;
   return `🔥 CYBERFX ${signal.direction} SIGNAL — XAUUSD
 
 ${entryLabel}
 
-* Entry: ${signal.entry}${orderType.includes("CMP") ? " (Current Market Price)" : ""}
+* Entry: ${signal.entry}
 * Stop Loss: ${signal.stopLoss}
 * Take Profit: ${signal.takeProfit}
-* Risk-to-Reward: 1:8
+* Risk-to-Reward: 1:4
 * Entry Timeframe: ${signal.entryTF}
 * Session: ${signal.session}
 
